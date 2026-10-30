@@ -118,8 +118,18 @@ with open(os.path.join(work, "parent-%s.json" % mode), "w", encoding="utf-8") as
     json.dump({"child_pid": p.pid, "parent_exit_at": time.time()}, f)
 '''
 
-CHILD_SRC = r'''import json, os, subprocess, sys, time
+CHILD_SRC = r'''import json, os, subprocess, sys, time, traceback
 work, mode, eng = sys.argv[1:4]
+def _fail(e):
+    with open(os.path.join(work, "child-%s.json" % mode), "w", encoding="utf-8") as f:
+        json.dump({"done": False, "error": "".join(traceback.format_exception_only(type(e), e)).strip()}, f)
+try:
+    exec(compile(open(__file__ + ".body", encoding="utf-8").read(), __file__ + ".body", "exec"))
+except Exception as e:
+    _fail(e)
+'''
+
+CHILD_BODY = r'''
 rounds, gap = int(os.environ.get("VMC_VERIFY_ROUNDS", "10")), float(os.environ.get("VMC_VERIFY_GAP", "1.5"))
 sys.path.insert(0, eng)
 from vmc_harness.core import proc
@@ -129,6 +139,7 @@ if sys.platform == "win32":
     from ctypes import wintypes
     k32 = ctypes.WinDLL("kernel32")
     k32.GetCurrentProcess.restype = wintypes.HANDLE
+    k32.IsProcessInJob.argtypes = [wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)]
     b = wintypes.BOOL()
     if k32.IsProcessInJob(k32.GetCurrentProcess(), None, ctypes.byref(b)):
         in_job = bool(b.value)
@@ -467,8 +478,26 @@ class Verify:
                  info.get("claude_version") or "없음 — 5단계 건너뜀")
         self.add("env.codex", "Codex 설치", "pass" if info.get("codex_which") else "skip",
                  info.get("codex_version") or "없음 — 6단계 건너뜀")
+        if info.get("claude_which") and not self.a.skip_claude:
+            self._claude_auth(info["claude_which"])
         self.add("env.previous", "기존 하네스 설치", "pass",
                  ("기존 커널 %s → 이번 빌드로 덮어씀" % prev) if prev else "기존 설치 없음")
+
+    def _claude_auth(self, claude):
+        """Claude 로그인 사전 확인 — 만료면 세션 단계가 전부 '실패'로 잘못 찍힌다(2026-10-30 첫 실행). 로그인을 받거나 건너뛴다."""
+        for attempt in range(3):
+            r = self.run([claude, "-p", "reply with the single word ok", "--model", "haiku"], cwd=self.work, timeout=120)
+            text = (r["out"] + r["err"]).lower()
+            if r["rc"] == 0 and "authenticate" not in text and "login" not in text:
+                self.add("env.claude-auth", "Claude 로그인 상태", "pass", "ok")
+                return True
+            print("\n[!] Claude Code 로그인이 안 돼 있습니다: %s" % tail(r["out"] + r["err"], 200).strip())
+            print("    새 PowerShell 창에서 `claude` 를 실행해 로그인(/login)한 뒤 이 창으로 돌아오세요.")
+            if self.ask("로그인했으면 y, Claude 단계를 건너뛰려면 n", "yn") != "y":
+                break
+        self.a.skip_claude = True
+        self.add("env.claude-auth", "Claude 로그인 상태", "skip", "로그인 안 됨 — Claude 세션 단계 건너뜀")
+        return False
 
     # ================================================================ 1 설치
     def step1_install(self):
@@ -637,6 +666,7 @@ class Verify:
         parent, child = d / "verify_parent.py", d / "verify_child.py"
         parent.write_text(PARENT_SRC, encoding="utf-8")
         child.write_text(CHILD_SRC, encoding="utf-8")
+        Path(str(child) + ".body").write_text(CHILD_BODY, encoding="utf-8")
         env = self.env({"VMC_VERIFY_ROUNDS": str(FLICKER_ROUNDS), "VMC_VERIFY_GAP": str(FLICKER_GAP_S)})
         args = [sys.executable, str(parent), mode, str(d), str(self.engine), str(child)]
         p = subprocess.Popen(args, cwd=str(d), env=env, stdin=subprocess.DEVNULL,
@@ -939,7 +969,7 @@ class Verify:
                "mcp.project-dir-claude"]
         if not claude or self.a.skip_claude:
             for i in ids:
-                self.add(i, i, "skip", "claude 없음" if not claude else "--skip-claude")
+                self.add(i, i, "skip", "claude 없음" if not claude else "--skip-claude 또는 로그인 안 됨")
             return
         self._add_probes()
         st, r = self._claude_mcp_list(claude)   # 프로젝트 서버는 대화형 승인 전이면 '승인 대기'로만 나온다 — 참고 증거
