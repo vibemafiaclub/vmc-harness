@@ -5,9 +5,27 @@
     "engine/tests/test_ledger_judge_scenario.py"
   ],
   "unverified": [
-    {"id": "win-week", "desc": "Windows 고객 PC에서 init 뒤 며칠 사용 — 작업 장부·일일 집계·판정이 끊기지 않고 쌓이는가", "status": "open"},
-    {"id": "learning-verdict", "desc": "판단 카드·생성 게이트가 실제 노출로 존속/원복 판정까지 가는가(노출 10회·최대 21일)", "status": "open"},
-    {"id": "win-scheduler", "desc": "Windows 작업 스케줄러 XML 등록·루프 절전 막기(spec 12 #8)", "status": "open"},
-    {"id": "codex-tui", "desc": "Codex 대화형 TUI 알림 표시·Windows codex.cmd(spec 12)", "status": "open"}
+    {
+      "id": "win-week",
+      "desc": "Windows 고객 PC에서 init 뒤 며칠 사용 — 작업 장부·일일 집계·판정이 끊기지 않고 쌓이는가",
+      "status": "open",
+      "note": "하루치 흐름은 2026-10-30 Windows 실기 통과(훅·착수 선언·장부·정상/강제 종료 마감·백그라운드 측정·창 깜빡임 없음·백그라운드 생존). 며칠 사용은 남음"
+    },
+    {
+      "id": "learning-verdict",
+      "desc": "판단 카드·생성 게이트가 실제 노출로 존속/원복 판정까지 가는가(노출 10회·최대 21일)",
+      "status": "open"
+    },
+    {
+      "id": "win-scheduler",
+      "desc": "Windows 작업 스케줄러 XML 등록·루프 절전 막기(spec 12 #8)",
+      "status": "verified",
+      "verified_by": "2026-10-30 Windows 11 실기(scripts/win_verify.py 2·4차): XML 등록·WakeToRun·배터리 무관·schtasks /Run으로 tick 실행·SetThreadExecutionState"
+    },
+    {
+      "id": "codex-tui",
+      "desc": "Codex 대화형 TUI 알림 표시·Windows codex.cmd(spec 12)",
+      "status": "open"
+    }
   ]
 }
