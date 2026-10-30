@@ -1,0 +1,90 @@
+# VMC 하네스 설정 기본값 (L0, spec 11).
+# 엔진은 vmc_harness.core.config.get()으로만 읽는다. 게이트 코드에 숫자 리터럴을 박지 않는다(커널 CI가 검사).
+# 줄마다 주석 메타: unit=<단위> md=<model_dependent yes|no> spec=<근거 문서> [measured=no: 실측 전 임시값]
+# 프로젝트는 프로파일(standard|gxp|prototype)만 고른다. 프로파일 차이는 [profile.<이름>] 덮어쓰기.
+
+[task]
+small_max_files = 1          # unit=files md=no spec=03
+small_max_p50_sec = 180      # unit=s md=yes spec=03
+
+[budget]
+small_task_overhead_s = 10   # unit=s md=yes spec=03
+gate_time_per_task_s = 20    # unit=s md=yes spec=02 measured=no
+rule_block_tokens = 1500     # unit=tokens md=no spec=02 measured=no
+hook_timeout_s = 8           # unit=s md=no spec=02
+window_tasks = 10            # unit=tasks md=no spec=01 measured=no
+
+[brain]
+haiku_timeout_s = 12         # unit=s md=yes spec=04
+search_top_k = 5             # unit=cards md=no spec=04
+learning_min_count = 2       # unit=count md=no spec=04
+promote_min_uses = 3         # unit=count md=no spec=04
+conflict_disable_count = 2   # unit=count md=no spec=04
+pull_timeout_s = 5           # unit=s md=no spec=04
+model = "haiku"              # unit=name md=yes spec=04
+
+[judge]
+exposures = 10               # unit=count md=no spec=04
+max_days = 21                # unit=days md=no spec=04
+false_block_immediate = 3    # unit=count md=no spec=04
+
+[approval]
+diff_max_lines = 50          # unit=lines md=no spec=08
+slow_answer_s = 180          # unit=s md=no spec=08
+
+[diagnose]
+top_k = 5                    # unit=proposals md=no spec=07
+budget_sec = 900             # unit=s md=yes spec=07 measured=no
+budget_tokens = 400000       # unit=tokens md=yes spec=07 measured=no
+
+[bootstrap]
+max_sessions = 200           # unit=sessions md=yes spec=07 measured=no
+
+[db]
+query_timeout_s = 30         # unit=s md=no spec=02
+auto_top_rows = 1000         # unit=rows md=no spec=02
+result_max_rows = 200        # unit=rows md=no spec=02
+patch_dir = "SQL"            # unit=path md=no spec=02
+
+[qa]
+scenario_budget_sec = 900    # unit=s md=yes spec=05 measured=no
+scenario_budget_tokens = 200000  # unit=tokens md=yes spec=05 measured=no
+
+[loop]
+enabled = true               # unit=bool md=no spec=06
+start_hour = 18              # unit=hour md=no spec=06
+idle_hours = 2.5             # unit=h md=no spec=06
+stop_hour = 7                # unit=hour md=no spec=06
+nightly_tokens = 1000000     # unit=tokens md=yes spec=06 measured=no
+recent_human_commit_hours = 24  # unit=h md=no spec=06
+check_interval_min = 30      # unit=min md=no spec=06
+auto_merge = true            # unit=bool md=no spec=06
+max_change_lines = 80        # unit=lines md=no spec=06 measured=no
+
+[retention]
+local_days = 90              # unit=days md=no spec=09
+
+[claude]
+cleanup_period_days = 365    # unit=days md=no spec=09
+
+[pm]
+model = "haiku"              # unit=name md=yes spec=03
+timeout_s = 60               # unit=s md=yes spec=03
+
+[render]
+model = "haiku"              # unit=name md=yes spec=08
+timeout_s = 30               # unit=s md=yes spec=08
+
+[update]
+check_timeout_s = 4          # unit=s md=no spec=10
+
+[server]
+base_url = "https://api.vibemafiaclub.com"  # unit=url md=no spec=10
+
+# ---- 프로파일 덮어쓰기 ----
+[profile.gxp]
+loop.enabled = false         # spec=06 GMP 변경관리 — 클렌징 루프 자체를 끈다
+loop.auto_merge = false
+
+[profile.prototype]
+judge.exposures = 5

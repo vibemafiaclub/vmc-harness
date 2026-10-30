@@ -1,0 +1,36 @@
+# 엔진 테스트 + 커널 CI(게이트 코드 숫자 리터럴·설정 메타·주입 허용 목록) — spec 01·11.
+# push는 ubuntu만. Windows(고객 주 개발 PC)는 수동 실행(workflow_dispatch) 때만 돌고, release.py publish가 그 커밋의 Windows 통과를 요구한다.
+# macOS는 개발 맥의 로컬 테스트로 갈음한다 — Actions macOS는 분당 10배라 무료 시간의 40%를 썼다(2026-10-23 최수민).
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        # ubuntu-latest(26.04)엔 setup-python 3.9 빌드가 없다 → 3.9는 22.04에서
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch'
+          && '[{"os":"ubuntu-latest","python":"3.12"},{"os":"ubuntu-22.04","python":"3.9"},{"os":"windows-latest","python":"3.9"},{"os":"windows-latest","python":"3.12"}]'
+          || '[{"os":"ubuntu-latest","python":"3.12"},{"os":"ubuntu-22.04","python":"3.9"}]') }}
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: git identity (테스트가 임시 레포에 커밋한다)
+        run: |
+          git config --global user.email ci@vmc.local
+          git config --global user.name ci
+          git config --global init.defaultBranch main
+      - name: unittest
+        working-directory: engine
+        run: python -m unittest discover -s tests -t .

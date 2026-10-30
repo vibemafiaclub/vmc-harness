@@ -1,0 +1,13 @@
+{
+  "name": "vmc-harness-local",
+  "owner": {
+    "name": "VIBE MAFIA CLUB"
+  },
+  "plugins": [
+    {
+      "name": "vmc-harness",
+      "source": "./"
+    }
+  ],
+  "description": "VMC 하네스 mod — 로컬 경로 설치용(라이선스 CLI가 내려놓은 폴더)"
+}

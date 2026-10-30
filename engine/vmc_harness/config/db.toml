@@ -1,0 +1,12 @@
+# DB 영역 설정 (spec 02 §DB 안전장치, 08 db-credential). 형식·메타는 defaults.toml과 같다.
+# defaults.toml에 이미 있는 db.* 키(query_timeout_s·auto_top_rows·result_max_rows·patch_dir)는 거기 것을 쓴다.
+
+[db]
+connect_timeout_s = 10       # unit=s md=no spec=02 measured=no
+cancel_grace_s = 5           # unit=s md=no spec=02 measured=no — 서버 취소가 안 먹을 때 클라이언트가 끊기까지 더 기다리는 시간
+dryrun_timeout_s = 300       # unit=s md=no spec=02 measured=no — 드라이런 전체(배치 합) 상한
+install_timeout_s = 300      # unit=s md=no spec=12 measured=no — 드라이버 설치 시도 상한
+facts_recheck_days = 7       # unit=days md=no spec=01 — 기계 사실(호환성 수준) 재확인 주기(P3)
+command_max_nest = 3          # unit=levels md=no spec=02 — 직접 접속 판정 때 명령 안 명령(ssh "…"·cmd /c) 해석 깊이. 넘으면 원문 패턴 검사로
+script_scan_max_bytes = 2000000  # unit=bytes md=no spec=02 — `python <파일>` 실행 시 직접 접속 코드 검사 상한
+prod_name_patterns = ["prod", "prd", "production", "live", "real", "운영", "상용", "실서버"]  # unit=names md=no spec=02 — 서버·DB 이름에 있으면 운영으로 보고 등록 거부(보수적)

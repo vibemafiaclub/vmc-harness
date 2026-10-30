@@ -1,0 +1,11 @@
+# eval·kernel 영역 설정 (spec 11 회귀 세트). 형식은 defaults.toml과 같다 — 줄마다 주석 메타.
+# 회귀 세트는 릴리스 전 VMC PC에서만 돈다(고객 PC에서 돌지 않는다).
+
+[eval]
+diagnose_runs = 1                # unit=runs md=no spec=11 — ① 진단을 새로 돌리는 횟수(출력이 매번 달라 평균). 1회 3~6분
+classify_sample_prompts = 100    # unit=prompts md=no spec=11 — ② 비용 상한: 표본에 넣는 사람 발화 수
+classify_session_max_prompts = 30  # unit=prompts md=no spec=11 — ② 표본 세션의 발화 상한(긴 세션 하나가 표본을 다 먹지 않게)
+classify_workers = 4             # unit=procs md=no spec=11 — ② 동시에 띄우는 LLM 호출 수
+overhead_rounds = 3              # unit=tasks md=no spec=11 — ④ 소·중 작업 각각 실측 건수
+overhead_bg_wait_s = 90          # unit=s md=yes spec=11 — ④ 백그라운드 PM·카드 검색 결과를 기다리는 상한(토큰 집계용)
+overhead_tolerance_ratio = 0.2   # unit=ratio md=no spec=11 measured=no — ④ 기준선 비교 때 시간·토큰 측정 잡음 허용 비율

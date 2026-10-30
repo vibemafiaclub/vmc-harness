@@ -1,0 +1,642 @@
+"""과설계 점검 (spec 03 §과설계 점검) — 작업 종료 때, **선언 대비 diff**로 본다("평소 수준 대비"는 쓰지 않는다).
+
+기계 신호(모든 작업):
+- new_file_out_of_scope   선언(new)에 없던 새 파일
+- new_module_out_of_scope 선언에 없던 새 모듈(착수 시점에 없던 디렉터리)
+- new_dependency          의존성 파일 diff(package.json·pyproject.toml·requirements*.txt)
+- unreferenced_public     새 공개 함수·export 중 참조 0 (Python ast, TS/JS 정규식)
+- single_impl_abstraction 구현 하나뿐인 새 추상화(Protocol·ABC·interface) — bootstrap facts `conventions`의 기존 관례 예외
+- near_duplicate_function 기존 함수와 거의 같은 새 함수(정규화 AST 해시·유사도, Python)
+LLM 신호(중·대만, 새 컨텍스트, 목표만):
+- unrequested_option      요청에 없는 옵션·설정·기능
+
+신호가 잡히면 축소 검토 1회만(handlers.on_stop). 메시지는 무엇이 잡혔는지만(01 P6).
+"""
+
+import ast
+import difflib
+import fnmatch
+import hashlib
+import json
+import re
+import sys
+from pathlib import Path, PurePosixPath
+
+from vmc_harness.core import config, gitutil
+from vmc_harness.core.jsonio import read_json, write_json
+from vmc_harness.task import scope, state as st
+
+PY = (".py",)
+TS = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
+DEP_FILES = ("package.json", "pyproject.toml", "requirements*.txt", "requirements/*.txt")
+# 프레임워크가 이름으로 부르는 export(참조 0이어도 정상)
+FRAMEWORK_EXPORTS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "metadata",
+                     "generateMetadata", "generateStaticParams", "config", "revalidate", "dynamic",
+                     "middleware", "loader", "action", "runtime"}
+PY_ENTRY = {"main", "setup", "teardown", "setUp", "tearDown", "setUpClass", "tearDownClass"}
+
+LABEL = {
+    "new_file_out_of_scope": "선언에 없던 새 파일",
+    "new_module_out_of_scope": "선언에 없던 새 모듈",
+    "new_dependency": "새 의존성",
+    "unreferenced_public": "참조 없는 새 공개 함수",
+    "single_impl_abstraction": "구현 하나뿐인 새 추상화",
+    "near_duplicate_function": "기존 함수와 거의 같은 새 함수",
+    "unrequested_option": "요청에 없는 옵션·기능",
+}
+
+OD_SYSTEM = (
+    "목표: 사람의 요청 대비 과한 것을 찾아라 — 요청에 없는 옵션·설정·기능·확장 지점.\n"
+    "참고: 사람이 쓴 지시문, 이번 작업의 diff.\n"
+    "제약: 요청을 이루는 데 필요한 것은 과한 것이 아니다. 확신이 없으면 넣지 않는다.\n"
+    '출력 형식: JSON 한 줄만. {"signals":[{"what":"<무엇이 과한지 한 구절>","path":"<파일>"}]} 없으면 {"signals":[]}'
+)
+
+
+# ---- git 도움 ----
+
+def _show(root, ref, path):
+    if not ref:
+        return None
+    rc, out, _ = gitutil.git(root, "show", "%s:%s" % (ref, path))
+    return out if rc == 0 else None
+
+
+def _base_files(root, ref):
+    if not ref:
+        return set()
+    rc, out, _ = gitutil.git(root, "ls-tree", "-r", "--name-only", "-z", ref)
+    return set(gitutil.split_z(out)) if rc == 0 else set()
+
+
+def _read(root, rel):
+    p = Path(root) / rel
+    try:
+        return p.read_text(encoding="utf-8", errors="replace") if p.is_file() else None
+    except OSError:
+        return None
+
+
+def _repo_files(root, exts):
+    files = set()
+    rc, out, _ = gitutil.git(root, "ls-files", "--cached", "--others", "--exclude-standard")
+    if rc == 0:
+        for l in out.splitlines():
+            l = l.strip()
+            if l.endswith(exts) and (Path(root) / l).is_file():
+                files.add(l)
+    return sorted(files)
+
+
+def _ref_count(root, name, exclude_file=None, exclude_line=None):
+    """이름이 단어로 나오는 줄 수(정의 줄 제외). 저장소의 추적·미추적 파일 대상."""
+    rc, out, _ = gitutil.git(root, "grep", "-n", "-w", "-I", "--untracked", "-F", "-e", name)
+    if rc not in (0, 1):
+        return None
+    n = 0
+    for line in out.splitlines():
+        parts = line.split(":", 2)
+        if len(parts) < 3:
+            continue
+        f, ln, text = parts
+        if f == exclude_file and str(ln) == str(exclude_line):
+            continue
+        if f.startswith(scope.HARNESS_PREFIX):
+            continue
+        n += 1
+    return n
+
+
+# ---- 의존성 ----
+
+_REQ_NAME = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9_.\-]*)")
+
+
+def _deps_package_json(text):
+    try:
+        d = json.loads(text or "{}")
+    except ValueError:
+        return set()
+    out = set()
+    for k in ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies"):
+        if isinstance(d.get(k), dict):
+            out.update(d[k].keys())
+    return out
+
+
+def _deps_requirements(text):
+    out = set()
+    for line in (text or "").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line or line.startswith("-"):
+            continue
+        m = _REQ_NAME.match(line)
+        if m:
+            out.add(m.group(1).lower())
+    return out
+
+
+def _deps_pyproject(text):
+    out = set()
+    text = text or ""
+    for m in re.finditer(r"(?m)^\s*(?:dependencies|[A-Za-z0-9_\-]+)\s*=\s*\[((?:[^\]\"']|\"[^\"]*\"|'[^']*')*)\]", text):
+        head = text[m.start():m.start() + 200].split("=", 1)[0].strip()
+        if head != "dependencies" and not _in_section(text, m.start(), "project.optional-dependencies"):
+            continue
+        for s in re.findall(r"[\"']([^\"']+)[\"']", m.group(1)):
+            n = _REQ_NAME.match(s)
+            if n:
+                out.add(n.group(1).lower())
+    section = None
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("[") and s.endswith("]"):
+            section = s.strip("[]").strip()
+            continue
+        if section and re.match(r"tool\.poetry\.(?:group\.[^.]+\.)?(?:dev-)?dependencies$", section):
+            m = _REQ_NAME.match(s)
+            if m and "=" in s and m.group(1).lower() != "python":
+                out.add(m.group(1).lower())
+    return out
+
+
+def _in_section(text, pos, name):
+    sec = None
+    for m in re.finditer(r"(?m)^\s*\[([^\]]+)\]\s*$", text[:pos]):
+        sec = m.group(1).strip()
+    return sec == name
+
+
+def _deps(path, text):
+    name = PurePosixPath(path).name
+    if name == "package.json":
+        return _deps_package_json(text)
+    if name == "pyproject.toml":
+        return _deps_pyproject(text)
+    return _deps_requirements(text)
+
+
+def _is_dep_file(path):
+    name = PurePosixPath(path).name
+    return any(fnmatch.fnmatch(name, p) or fnmatch.fnmatch(path, p) for p in DEP_FILES)
+
+
+# ---- Python AST ----
+
+def _parse_py(text):
+    try:
+        return ast.parse(text or "")
+    except (SyntaxError, ValueError):
+        return None
+
+
+def _top_defs(tree):
+    out = {}
+    if tree is None:
+        return out
+    for n in tree.body:
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            out[n.name] = n
+    return out
+
+
+def _all_funcs(tree):
+    out = []
+    if tree is None:
+        return out
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            out.append(n)
+    return out
+
+
+def _qual_funcs(tree):
+    """{"Class.method"|"func": node} — 모듈 최상위와 클래스 안 함수."""
+    out = {}
+    if tree is None:
+        return out
+
+    def walk(body, prefix):
+        for n in body:
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                out[prefix + n.name] = n
+                walk(n.body, prefix + n.name + ".")
+            elif isinstance(n, ast.ClassDef):
+                walk(n.body, prefix + n.name + ".")
+    walk(tree.body, "")
+    return out
+
+
+def _base_names(cls):
+    names = []
+    for b in cls.bases:
+        if isinstance(b, ast.Name):
+            names.append(b.id)
+        elif isinstance(b, ast.Attribute):
+            names.append(b.attr)
+        elif isinstance(b, ast.Subscript):
+            v = b.value
+            names.append(v.id if isinstance(v, ast.Name) else getattr(v, "attr", ""))
+    for kw in cls.keywords:
+        if kw.arg == "metaclass":
+            v = kw.value
+            names.append(v.id if isinstance(v, ast.Name) else getattr(v, "attr", ""))
+    return names
+
+
+def _abstraction_kind(cls):
+    bases = _base_names(cls)
+    if "Protocol" in bases:
+        return "protocol"
+    if "ABC" in bases or "ABCMeta" in bases:
+        return "abc"
+    for n in ast.walk(cls):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for d in n.decorator_list:
+                name = d.id if isinstance(d, ast.Name) else getattr(d, "attr", "")
+                if name == "abstractmethod":
+                    return "abc"
+    return None
+
+
+class _Norm(ast.NodeTransformer):
+    """식별자·상수 값·docstring을 지워 구조만 남긴다."""
+
+    def visit_Name(self, node):
+        return ast.copy_location(ast.Name(id="_", ctx=node.ctx), node)
+
+    def visit_arg(self, node):
+        node.arg = "_"
+        node.annotation = None
+        return node
+
+    def visit_Constant(self, node):
+        return ast.copy_location(ast.Constant(value=type(node.value).__name__), node)
+
+    def _strip_doc(self, node):
+        body = node.body
+        if body and isinstance(body[0], ast.Expr) and isinstance(getattr(body[0], "value", None), ast.Constant) \
+                and isinstance(body[0].value.value, str):
+            node.body = body[1:] or [ast.Pass()]
+        return node
+
+    def visit_FunctionDef(self, node):
+        node = self._strip_doc(node)
+        node.name = "_"
+        node.decorator_list = []
+        node.returns = None
+        self.generic_visit(node)
+        return node
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+
+def _norm_dump(fn):
+    import copy
+    try:
+        n = _Norm().visit(copy.deepcopy(fn))
+        return ast.dump(n, annotate_fields=False, include_attributes=False)
+    except Exception:
+        return None
+
+
+def _node_count(fn):
+    return sum(1 for _ in ast.walk(fn))
+
+
+def _tokens(dump):
+    return re.findall(r"[A-Za-z_]+|[^\sA-Za-z_]", dump or "")
+
+
+# ---- TS/JS ----
+
+_TS_EXPORT = re.compile(
+    r"^\s*export\s+(?:declare\s+)?(?:async\s+)?(?:function\*?|const|let|var|class|interface|type|enum|abstract\s+class)\s+([A-Za-z_$][\w$]*)",
+    re.M)
+_TS_ABSTRACT = re.compile(r"^\s*(?:export\s+)?(?:declare\s+)?(interface|abstract\s+class)\s+([A-Za-z_$][\w$]*)", re.M)
+
+
+def _ts_exports(text):
+    return {m.group(1): text[:m.start()].count("\n") + 1 for m in _TS_EXPORT.finditer(text or "")}
+
+
+def _ts_abstractions(text):
+    return {m.group(2): ("interface" if m.group(1) == "interface" else "abstract")
+            for m in _TS_ABSTRACT.finditer(text or "")}
+
+
+# ---- 관례 예외 ----
+
+def _conventions_text(root):
+    try:
+        from vmc_harness.bootstrap.facts import load
+    except ImportError:
+        return ""
+    try:
+        conv = (load(root) or {}).get("conventions") or []
+    except Exception:
+        return ""
+    parts = []
+    for c in conv if isinstance(conv, list) else [conv]:
+        parts.append(c if isinstance(c, str) else json.dumps(c, ensure_ascii=False))
+    return " ".join(parts).lower()
+
+
+def _convention_allows(conv_text, kind):
+    if not conv_text:
+        return False
+    keys = {"protocol": ("protocol",), "abc": ("abc", "abstract"), "interface": ("interface",),
+            "abstract": ("abstract",)}.get(kind, (kind,))
+    return any(k in conv_text for k in keys)
+
+
+# ---- 기계 신호 ----
+
+def machine_signals(root, task, files=None):
+    """[{"kind","path","name"?,"detail"?}]"""
+    declare = task.get("declare") or {}
+    base = (task.get("base") or {}).get("head")
+    files = files if files is not None else scope.touched(root, task)
+    base_files = _base_files(root, base)
+    base_dirs = {str(PurePosixPath(f).parent) for f in base_files}
+    for f in list(base_dirs):
+        p = PurePosixPath(f)
+        base_dirs.update(str(x) for x in p.parents)
+    signals = []
+    new_decl = {"scope": declare.get("new") or []}
+    exact_scope = {scope.norm(x) for x in declare.get("scope") or []}
+    existing = [f for f in files if (Path(root) / f).is_file()]
+    # 새 파일 = 착수 스냅샷 때 없던 파일(HEAD에도, 착수 전 미커밋 변경에도 없음 — scope.existed_at_base와 같은 기준)
+    pre = (task.get("base") or {}).get("dirty") or {}
+    new_files = [f for f in existing if f not in base_files and pre.get(f) is None] if base else list(existing)
+
+    # 새 파일·모듈
+    seen_mod = set()
+    for f in new_files:
+        if scope.in_scope(root, new_decl, f) or f in exact_scope:
+            continue
+        signals.append({"kind": "new_file_out_of_scope", "path": f})
+        d = str(PurePosixPath(f).parent)
+        if base and d not in (".", "") and d not in base_dirs:
+            top = d
+            for parent in PurePosixPath(d).parents:
+                if str(parent) in (".", "") or str(parent) in base_dirs:
+                    break
+                top = str(parent)
+            if top not in seen_mod and not scope.in_scope(root, new_decl, top + "/x"):
+                seen_mod.add(top)
+                signals.append({"kind": "new_module_out_of_scope", "path": top})
+
+    # 새 의존성
+    new_names = " ".join(declare.get("new") or []).lower()
+    for f in files:
+        if not _is_dep_file(f):
+            continue
+        before = _deps(f, _show(root, base, f) or "")
+        after = _deps(f, _read(root, f) or "")
+        for name in sorted(after - before):
+            if name.lower() in new_names:
+                continue
+            signals.append({"kind": "new_dependency", "path": f, "name": name})
+
+    conv = None
+    py_new_funcs = []
+    for f in existing:
+        if f.endswith(PY):
+            now_tree = _parse_py(_read(root, f))
+            old_tree = _parse_py(_show(root, base, f)) if f not in new_files else None
+            now_defs, old_defs = _top_defs(now_tree), _top_defs(old_tree)
+            is_test = PurePosixPath(f).name.startswith("test_") or "/tests/" in "/" + f
+            for name, node in now_defs.items():
+                if name in old_defs:
+                    continue
+                # 참조 0 공개 함수
+                if not name.startswith("_") and not is_test and name not in PY_ENTRY \
+                        and not getattr(node, "decorator_list", None):
+                    refs = _ref_count(root, name, exclude_file=f, exclude_line=node.lineno)
+                    if refs == 0:
+                        signals.append({"kind": "unreferenced_public", "path": f, "name": name})
+                # 구현 하나뿐인 추상화
+                if isinstance(node, ast.ClassDef):
+                    kind = _abstraction_kind(node)
+                    if kind:
+                        if conv is None:
+                            conv = _conventions_text(root)
+                        if not _convention_allows(conv, kind):
+                            impls = _py_impl_count(root, name, kind)
+                            if impls is not None and impls <= 1:
+                                signals.append({"kind": "single_impl_abstraction", "path": f, "name": name,
+                                                "detail": kind})
+            old_names = set(_qual_funcs(old_tree))
+            for qn, fn in _qual_funcs(now_tree).items():
+                if qn in old_names:
+                    continue
+                d = _norm_dump(fn)
+                if d:
+                    py_new_funcs.append((f, fn, d))
+        elif f.endswith(TS):
+            now_text = _read(root, f) or ""
+            old_text = _show(root, base, f) if f not in new_files else ""
+            old_exp = set(_ts_exports(old_text or ""))
+            for name, line in _ts_exports(now_text).items():
+                if name in old_exp or name in FRAMEWORK_EXPORTS or "/test" in "/" + f or ".test." in f \
+                        or ".spec." in f:
+                    continue
+                refs = _ref_count(root, name, exclude_file=f, exclude_line=line)
+                if refs == 0:
+                    signals.append({"kind": "unreferenced_public", "path": f, "name": name})
+            old_abs = _ts_abstractions(old_text or "")
+            for name, kind in _ts_abstractions(now_text).items():
+                if name in old_abs:
+                    continue
+                if conv is None:
+                    conv = _conventions_text(root)
+                if _convention_allows(conv, kind):
+                    continue
+                impls = _ts_impl_count(root, name, kind)
+                if impls == 1:
+                    signals.append({"kind": "single_impl_abstraction", "path": f, "name": name, "detail": kind})
+
+    if py_new_funcs:
+        signals.extend(_near_duplicates(root, py_new_funcs, set(files)))
+    return signals
+
+
+def _py_impl_count(root, name, kind):
+    """name을 상속하는 클래스 수. Protocol은 구조적 타이핑이라 이름에 name을 품은 클래스도 센다(InMemoryX·MssqlX 관례)."""
+    rc, out, _ = gitutil.git(root, "grep", "-n", "-I", "--untracked", "-E", "^[[:space:]]*class[[:space:]]")
+    if rc not in (0, 1):
+        return None
+    pat_base = re.compile(r"class\s+([A-Za-z_]\w*)\s*\(([^)]*)\)")
+    pat_any = re.compile(r"class\s+([A-Za-z_]\w*)")
+    n = 0
+    for line in out.splitlines():
+        parts = line.split(":", 2)
+        if len(parts) < 3 or not parts[0].endswith(PY):
+            continue
+        text = parts[2]
+        m = pat_base.search(text)
+        if m and m.group(1) != name and re.search(r"\b%s\b" % re.escape(name), m.group(2)):
+            n += 1
+            continue
+        if kind == "protocol":
+            m2 = pat_any.search(text)
+            if m2 and m2.group(1) != name and name in m2.group(1):
+                n += 1
+    return n
+
+
+def _ts_impl_count(root, name, kind):
+    word = "implements" if kind == "interface" else "extends"
+    rc, out, _ = gitutil.git(root, "grep", "-n", "-I", "--untracked", "-F", "-e", word)
+    if rc not in (0, 1):
+        return None
+    pat = re.compile(r"\b%s\b[^{]*\b%s\b" % (word, re.escape(name)))
+    return sum(1 for l in out.splitlines() if l.split(":", 1)[0].endswith(TS) and pat.search(l.split(":", 2)[-1]))
+
+
+def _near_duplicates(root, new_funcs, touched):
+    threshold = config.get("task.dup_similarity", root)
+    min_nodes = config.get("task.dup_min_nodes", root)
+    max_files = config.get("task.dup_scan_max_files", root)
+    candidates = [(f, fn, d) for f, fn, d in new_funcs if _node_count(fn) >= min_nodes]
+    if not candidates:
+        return []
+    new_lines = {(f, fn.lineno) for f, fn, _ in new_funcs}
+    existing = []  # (path, name, dump, hash)
+    for rel in _repo_files(root, PY)[:max_files]:
+        tree = _parse_py(_read(root, rel))
+        for fn in _all_funcs(tree):
+            if (rel, fn.lineno) in new_lines or _node_count(fn) < min_nodes:
+                continue
+            d = _norm_dump(fn)
+            if not d:
+                continue
+            existing.append((rel, fn.name, d, hashlib.sha1(d.encode()).hexdigest()))
+    by_hash = {}
+    for e in existing:
+        by_hash.setdefault(e[3], e)
+    out = []
+    for f, fn, d in candidates:
+        h = hashlib.sha1(d.encode()).hexdigest()
+        hit = by_hash.get(h)
+        if not hit:
+            toks = _tokens(d)
+            best = None
+            for e in existing:
+                et = _tokens(e[2])
+                if not et or min(len(toks), len(et)) / float(max(len(toks), len(et))) < threshold:
+                    continue
+                sm = difflib.SequenceMatcher(None, toks, et, autojunk=False)
+                if sm.real_quick_ratio() < threshold or sm.quick_ratio() < threshold:
+                    continue
+                r = sm.ratio()
+                if r >= threshold and (best is None or r > best[0]):
+                    best = (r, e)
+            hit = best[1] if best else None
+        if hit:
+            out.append({"kind": "near_duplicate_function", "path": f, "name": fn.name,
+                        "detail": "%s:%s" % (hit[0], hit[1])})
+    return out
+
+
+# ---- LLM 신호(중·대) ----
+
+def od_path(root, task_id):
+    return st.task_path(root, task_id, ".od")
+
+
+def spawn_llm(root, task_id, transcript_path=None, agent=None):
+    """요청에 없는 옵션·기능 LLM 판정을 백그라운드로(Stop 훅 시간 상한 안에 못 끝나므로)."""
+    from vmc_harness.task import pm
+    write_json(od_path(root, task_id), {"status": "running"})
+    args = [sys.executable, "-m", "vmc_harness", "task-bg", task_id, "--root", str(root), "--overdesign"]
+    if transcript_path:
+        args += ["--transcript", str(transcript_path)]
+    if agent:
+        args += ["--agent", agent]
+    if pm.is_sync(root, agent):
+        run_llm(root, task_id, transcript_path, agent)
+        return "sync"
+    try:
+        from vmc_harness.core.proc import spawn_detached
+        spawn_detached(args, cwd=str(root), env=pm._env())
+        return "async"
+    except Exception:
+        run_llm(root, task_id, transcript_path, agent)
+        return "sync"
+
+
+def _prompts_text(transcript_path, agent, max_chars):
+    if not transcript_path:
+        return ""
+    try:
+        from vmc_harness import sessions
+        s = sessions.parse(transcript_path, agent)
+    except Exception:
+        return ""
+    text = "\n---\n".join(p.get("text") or "" for p in s.human_prompts)
+    return text[-max_chars:]
+
+
+def run_llm(root, task_id, transcript_path=None, agent=None):
+    task = st.by_id(root, task_id)
+    if not task:
+        return None
+    files = scope.touched(root, task)
+    base = (task.get("base") or {}).get("head") or "HEAD"
+    max_diff = config.get("task.overdesign_diff_max_chars", root)
+    max_prompt = config.get("task.overdesign_prompt_max_chars", root)
+    diff = ""
+    if files:
+        rc, out, _ = gitutil.git(root, "diff", base, "--", *files)
+        diff = out if rc == 0 else ""
+        for f in files:  # 미추적 새 파일 본문
+            if len(diff) >= max_diff:
+                break
+            if f not in diff:
+                body = _read(root, f)
+                if body is not None:
+                    diff += "\n+++ %s (새 파일)\n%s" % (f, body)
+    diff = diff[:max_diff]
+    prompts = _prompts_text(transcript_path, agent, max_prompt) or (task.get("declare") or {}).get("intent", "")
+    rec = {"status": "done", "signals": [], "tokens": 0}
+    if diff.strip():
+        try:
+            from vmc_harness.core.llm import claude_p
+            from vmc_harness.task.pm import parse_json_obj
+            res = claude_p("[사람 지시문]\n%s\n\n[diff]\n%s" % (prompts, diff), model=config.get("pm.model", root),
+                           system=OD_SYSTEM, timeout=config.get("task.overdesign_llm_timeout_s", root))
+        except Exception:
+            res = None
+        if res:
+            rec["tokens"] = res.get("tokens", 0)
+            obj = parse_json_obj(res.get("text")) or {}
+            for s in obj.get("signals") or []:
+                if isinstance(s, dict) and s.get("what"):
+                    rec["signals"].append({"kind": "unrequested_option", "path": s.get("path"),
+                                           "name": str(s["what"])[:120]})
+    write_json(od_path(root, task_id), rec)
+    st.add_overhead(root, task_id, tokens=rec["tokens"])
+    return rec
+
+
+def read_llm(root, task_id):
+    rec = read_json(od_path(root, task_id))
+    return rec if rec and rec.get("status") == "done" else None
+
+
+def describe(signals):
+    """"과설계 신호: …" — 무엇이 잡혔는지만."""
+    parts = []
+    for s in signals:
+        label = LABEL.get(s["kind"], s["kind"])
+        what = s.get("name") or ""
+        where = s.get("path") or ""
+        if s["kind"] == "near_duplicate_function" and s.get("detail"):
+            parts.append("%s %s(%s) ≈ %s" % (label, what, where, s["detail"]))
+        elif what and where:
+            parts.append("%s %s(%s)" % (label, what, where))
+        else:
+            parts.append("%s %s" % (label, what or where))
+    return "과설계 신호: " + " · ".join(parts)

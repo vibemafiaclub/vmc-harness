@@ -1,0 +1,9 @@
+{
+  "name": "vmc-harness",
+  "version": "0.1.0",
+  "description": "VMC 하네스 패널 — 내 작업·팀 대시보드. vmc-harness brief --json을 그리기만 한다",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "VIBE MAFIA CLUB"
+  }
+}

@@ -1,0 +1,54 @@
+# gates 영역 설정 (L0, spec 02). 형식은 defaults.toml과 같다.
+# 줄마다 주석 메타: unit=<단위> md=<model_dependent yes|no> spec=<근거 문서> [measured=no: 실측 전 임시값]
+
+[gates]
+completion_max_blocks = 3        # unit=count md=yes spec=02 measured=no — 같은 작업에서 완료 게이트가 종료를 막는 최대 횟수(무한 정지 방지). 넘으면 통과 + 꼭 알릴 일
+proceed_window_min = 30          # unit=min md=no spec=02 measured=no — 차단 뒤 사람이 "그냥 진행"이라 말하면 헛막기로 인정하는 시간
+proceed_phrases = ["그냥 진행", "그냥 해", "무시하고 진행", "막지 말고 진행", "proceed anyway", "just proceed"]  # unit=list md=no spec=00
+fact_refresh_hours = 24          # unit=h md=no spec=01 — 기계 사실 규칙의 읽은 명령 재실행 간격(세션 시작 때)
+fact_command_timeout_s = 20      # unit=s md=no spec=01
+cost_ema_alpha = 0.3             # unit=ratio md=no spec=02 — 생성 게이트 실행 시간 이동 평균 가중치
+impact_max_depth = 3             # unit=hops md=no spec=02 — 호출처 역추적 깊이
+impact_max_files = 20000         # unit=files md=no spec=02 — 역추적 때 훑는 파일 상한
+impact_max_file_bytes = 1000000  # unit=bytes md=no spec=02
+api_timeout_s = 30               # unit=s md=no spec=02
+api_body_max_chars = 4000        # unit=chars md=no spec=02 — API 증거에 남기는 응답 본문 길이
+test_timeout_s = 1800            # unit=s md=no spec=02
+test_output_tail_lines = 200     # unit=lines md=no spec=02
+token_ascii_chars = 4            # unit=chars/token md=no spec=02 — 규칙 블록 토큰 추정: 영문 4자=1토큰, 그 외 1자=1토큰
+codex_trust_timeout_s = 20       # unit=s md=no spec=02 — Codex 훅 신뢰 등록(app-server) 시간 상한
+reason_max_files = 5             # unit=files md=no spec=01 — 차단 사유에 나열하는 파일 수
+state_keep_blocks = 50           # unit=count md=no spec=02 — 세션 캐시에 남기는 최근 차단 수
+shell_max_nest = 4               # unit=levels md=no spec=02 — 셸 명령 안 셸(bash -c·pwsh -Command) 해석 깊이. 넘으면 판정 불가(opaque)로 본다
+# 해석 못 한 셸 명령(python heredoc·스크립트 등)은 미리 막지 않고 실행 뒤 대상 파일(장부·증거·보호 영역·경로형 생성 게이트) 상태를 대조한다
+opaque_backup_max_bytes = 2000000   # unit=bytes md=no spec=02 measured=no — 실행 전 사본을 떠 두는 파일 크기 상한(git에 변경 없이 추적되는 파일은 사본 없이 index에서 되돌린다)
+opaque_watch_max_files = 20000      # unit=files md=no spec=02 measured=no — 대조 대상 파일 수 상한. 넘으면 대조하지 않고 옛 방식(명령 문자열에 장부 경로가 보이면 미리 막기)
+opaque_git_timeout_s = 20           # unit=s md=no spec=02 measured=no — 대조용 git 목록 조회 시간 상한. 넘으면 옛 방식
+opaque_stale_min = 120              # unit=min md=no spec=02 — PostToolUse가 찾아가지 않은 실행 전 기록(다른 게이트가 막은 호출 등)을 버리는 시간
+engine_writes_log_max_bytes = 1000000  # unit=bytes md=no spec=02 — 엔진 장부·증거 쓰기 일지 크기 상한. 넘으면 실행 전 기록 때 뒤쪽 절반만 남긴다
+
+# 동작 분류(완료 게이트가 "페이지·API·DB 동작이 바뀌었나"를 보는 glob). 프로젝트는 .harness/config.json "behavior_globs"나
+# 부트스트랩 facts의 behavior_globs로 덮어쓴다(기계 사실).
+page_globs = ["**/pages/**", "**/app/**/page.*", "**/app/**/layout.*", "**/views/**", "**/templates/**", "**/components/**", "**/*.tsx", "**/*.jsx", "**/*.vue", "**/*.svelte", "**/*.html"]  # unit=glob md=no spec=02
+api_globs = ["**/api/**", "**/routes/**", "**/routers/**", "**/controllers/**", "**/endpoints/**", "**/handlers/**", "**/middleware.*", "**/server/**"]  # unit=glob md=no spec=02
+db_globs = ["**/*.sql", "**/migrations/**", "**/repositories/**", "**/repository/**", "**/*repo*.py", "**/*repository*.*", "**/models/**", "**/schema.*", "**/db/**"]  # unit=glob md=no spec=02
+
+# 검증물(기존 테스트·QA 시나리오·기대값) glob — 변조 금지 대상
+test_globs = ["**/test_*.py", "**/*_test.py", "**/tests/**", "**/test/**", "**/__tests__/**", "**/*.test.*", "**/*.spec.*", "**/e2e/**", "**/conftest.py"]  # unit=glob md=no spec=02
+expected_globs = ["**/__snapshots__/**", "**/*.snap", "**/golden/**", "**/expected/**", "**/fixtures/expected*", ".harness/qa/scenarios/**", ".harness/qa/results.json"]  # unit=glob md=no spec=02
+
+# "그냥 진행"을 받는 게이트(엔진 쓰기 보호·DB 직접 접속 실행은 받지 않는다. 보호 영역·메타 게이트 풀기는 승인 카드로)
+proceed_allowed = ["completion", "tamper", "generated", "prod_config", "overdesign", "db_text"]  # unit=list md=no spec=00 — prod_config(운영 접속 설정)는 이름·내용 추정이라 오탐 탈출구를 둔다. overdesign(과설계 Stop 차단)도 차단 기록에 남아 proceed 대상. db_text는 실행하지 않는 문자열(echo·JSON 페이로드·heredoc 데이터·해석 실패한 명령 원문)에 SQL 접속 흔적만 보여 막은 경우 — 실제 DB 도구·드라이버 실행(db_direct)은 받지 않는다
+
+# 사람 명시 요청 → 게이트 본체 생성(LLM이 목표·참고 자료·제약·출력 형식만 받아 쓴다, 01 P6)
+generate_model = "sonnet"        # unit=name md=yes spec=02
+generate_timeout_s = 120         # unit=s md=yes spec=02 measured=no
+stop_hook_timeout_s = 60         # unit=s md=yes spec=02 measured=no — Stop 훅(완료 게이트·영향 반경) 시간 상한. 넘으면 에이전트가 훅을 건너뛴다
+
+# 검증 게이트 소요 실측(테스트·빌드·린트·타입체크·git commit 훅 근사) — 참고 사실, 판정을 움직이지 않는다(04)
+verify_slow_sec = 60             # unit=s md=no spec=04 measured=no — 1회 평균 소요가 이 이상이면 '느린 게이트'
+verify_frequent_per_week = 20    # unit=runs/week md=no spec=04 measured=no — 주당 실행 횟수가 이 이상이면 '자주 도는 게이트'. 둘 다 넘으면 재배치 후보(제안만)
+verify_pending_max_s = 7200      # unit=s md=no spec=02 — PreToolUse에 적어 둔 시작 시각을 PostToolUse가 안 찾아가면 이 뒤에 버린다
+
+# 운영 접속 설정 파일 보호(읽기·그 설정으로 앱 실행) — 이름 패턴은 db.prod_name_patterns 재사용
+prod_config_scan_bytes = 200000  # unit=bytes md=no spec=02 — 접속 정보 형태를 찾을 때 파일 앞에서 읽는 상한

@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vmc-harness"
+version = "0.1.4"
+requires-python = ">=3.9"
+description = "VMC 하네스 엔진"
+
+[project.optional-dependencies]
+db = ["pymssql"]
+
+[project.scripts]
+vmc-harness = "vmc_harness.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["engine"]
+
+[tool.setuptools.package-data]
+vmc_harness = ["config/*.toml", "PRINCIPLES.md", "**/*.html", "**/*.js", "**/*.txt", "**/*.md"]

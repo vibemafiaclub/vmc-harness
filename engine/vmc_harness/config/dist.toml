@@ -1,0 +1,14 @@
+# 배포·업데이트·원격 서버 설정 (dist 영역, spec 10). 형식은 defaults.toml과 같다(줄마다 주석 메타).
+# defaults.toml의 update.check_timeout_s · server.base_url도 이 영역이 쓴다.
+
+[update]
+auto = true                  # unit=bool md=no spec=10 — 세션 시작 자동 업데이트 확인. PC 단위 덮어쓰기: `vmc-harness update --auto off|on`(~/.vmc-harness/update.json). 수동 `update`는 이 값과 무관
+check_interval_h = 24        # unit=h md=no spec=10 — 세션 시작 자동 업데이트 확인 간격(하루 1회)
+download_timeout_s = 300     # unit=s md=no spec=10
+keep_versions = 2            # unit=count md=no spec=10 — current 포함 남겨 둘 커널 버전 수(직전 버전 1개로 되돌릴 수 있게)
+
+[server]
+call_timeout_s = 10          # unit=s md=no spec=10 — activate·lock 등 API 호출
+
+[lock]
+local_stale_s = 43200        # unit=s md=no spec=06 — 로컬 잠금 파일이 이보다 오래되면 죽은 것으로 본다(서버 잠금 ttl 상한과 같은 12시간)

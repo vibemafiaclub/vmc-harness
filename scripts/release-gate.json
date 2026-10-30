@@ -1,0 +1,13 @@
+{
+  "_doc": "출고 기준(spec 11 §출고 기준). release.py publish가 읽는다. scenario_tests: 이 파일이 없으면 게시 거부(CI가 내용을 돌린다). unverified: 고객 환경에서 아직 끝까지 확인 못 한 것 — open이면 --accept-open <id>로 명시해야 게시되고, 그 목록이 manifest.unverified와 릴리스 노트에 '시험 기능'으로 실린다. 확인되면 status를 verified로 바꾸고 근거(verified_by)를 적는다.",
+  "scenario_tests": [
+    "engine/tests/test_task_lifecycle_scenario.py",
+    "engine/tests/test_ledger_judge_scenario.py"
+  ],
+  "unverified": [
+    {"id": "win-week", "desc": "Windows 고객 PC에서 init 뒤 며칠 사용 — 작업 장부·일일 집계·판정이 끊기지 않고 쌓이는가", "status": "open"},
+    {"id": "learning-verdict", "desc": "판단 카드·생성 게이트가 실제 노출로 존속/원복 판정까지 가는가(노출 10회·최대 21일)", "status": "open"},
+    {"id": "win-scheduler", "desc": "Windows 작업 스케줄러 XML 등록·루프 절전 막기(spec 12 #8)", "status": "open"},
+    {"id": "codex-tui", "desc": "Codex 대화형 TUI 알림 표시·Windows codex.cmd(spec 12)", "status": "open"}
+  ]
+}

@@ -1,0 +1,19 @@
+# task 영역 설정 (spec 03·09). defaults.toml과 같은 주석 메타 형식. 키 중복 금지.
+# 줄마다 주석 메타: unit=<단위> md=<model_dependent yes|no> spec=<근거 문서> [measured=no: 실측 전 임시값]
+
+[task]
+similar_top_k = 3                # unit=tasks md=no spec=03 — 착수 시점 "비슷한 과거 작업 실측" 개수
+similar_min_score = 0.2          # unit=ratio md=no spec=03 measured=no — 범위·의도 겹침 하한
+finalize_idle_min = 120          # unit=min md=no spec=03 measured=no — 마지막 활동 뒤 이 시간이 지나면 작업을 끝난 것으로 본다(task/lifecycle.py 공용 판정 — 세션 시작·밤 루프·brief 모두 같은 기준)
+session_keep_days = 90           # unit=days md=no spec=09 — 로컬 세션 상태 파일 보관
+pm_sync_agents = []              # unit=agents md=no spec=03 — PM·카드 검색을 동기로 돌릴 에이전트(Codex 훅 비동기 불가가 확인되면 "codex", 12 #3)
+overdesign_llm_timeout_s = 60    # unit=s md=yes spec=03 measured=no
+overdesign_diff_max_chars = 20000  # unit=chars md=yes spec=03 measured=no — LLM 판정에 넣는 diff 상한
+overdesign_prompt_max_chars = 4000 # unit=chars md=yes spec=03 measured=no — LLM 판정에 넣는 사람 지시문 상한
+dup_similarity = 0.92            # unit=ratio md=no spec=03 measured=no — 정규화 AST 토큰 유사도(이상이면 거의 같은 함수)
+dup_min_nodes = 25               # unit=nodes md=no spec=03 measured=no — 이보다 작은 함수는 유사도 비교 안 함(작은 함수는 우연히 닮는다)
+dup_scan_max_files = 3000        # unit=files md=no spec=03 measured=no — 기존 함수 비교 대상 파일 상한(편의 장치 비용 상한)
+report_max_lines = 20            # unit=lines md=no spec=03 — 완료 보고 블록의 범위 밖 변경 줄 상한(넘으면 "외 N건")
+
+[pm]
+wait_s = 20                      # unit=s md=yes spec=03 measured=no — 선언 범위 밖 첫 편집 직전 PM 결과 대기 상한

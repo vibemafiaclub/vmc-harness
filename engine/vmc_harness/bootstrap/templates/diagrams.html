@@ -1,0 +1,150 @@
+<!-- 하네스 구성 그림 1~3. 원본: context-hub projects/vmc-harness/docs/261022_설계브리핑.html (VMC 자산). 설계가 바뀌면 함께 고친다. -->
+<div class="fig">
+<svg viewBox="0 0 1100 620" width="100%" font-family="-apple-system,Pretendard,sans-serif" font-size="13">
+  <defs><marker id="a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#555"/></marker></defs>
+  <!-- PC -->
+  <rect x="10" y="10" width="760" height="600" rx="10" fill="#f3f6fb" stroke="#1B2A4A" stroke-width="1.5"/>
+  <text x="26" y="34" font-weight="700" fill="#1B2A4A" font-size="15">개발자 PC (팀원 각자)</text>
+  <!-- agent -->
+  <rect x="30" y="52" width="230" height="74" rx="8" fill="#fff" stroke="#888"/>
+  <text x="45" y="76" font-weight="700">AI 에이전트</text>
+  <text x="45" y="96">Claude Code (주 도구) · Codex</text>
+  <text x="45" y="114" fill="#777">개발자는 지시만 한다</text>
+  <!-- panel -->
+  <rect x="30" y="140" width="230" height="64" rx="8" fill="#fff" stroke="#d97757"/>
+  <text x="45" y="163" font-weight="700" fill="#b35a3c">화면: mod 패널 · 상태 줄</text>
+  <text x="45" y="183">[내 작업] [팀 대시보드]</text>
+  <!-- engine -->
+  <rect x="290" y="52" width="460" height="300" rx="8" fill="#fff" stroke="#1B2A4A"/>
+  <text x="305" y="76" font-weight="700" fill="#1B2A4A">하네스 엔진 (읽기 전용 · VMC가 버전으로 배포)</text>
+  <rect x="305" y="88" width="200" height="40" rx="5" fill="#eef1f7" stroke="#9aa6bf"/><text x="315" y="113">훅 디스패처 (모든 훅의 입구)</text>
+  <rect x="520" y="88" width="215" height="40" rx="5" fill="#fbecea" stroke="#d98a80"/><text x="530" y="113">안전 게이트 — DB·보호 영역·변조</text>
+  <rect x="305" y="138" width="200" height="40" rx="5" fill="#fbecea" stroke="#d98a80"/><text x="315" y="163">완료 게이트 — 실제 동작 증거</text>
+  <rect x="520" y="138" width="215" height="40" rx="5" fill="#eef1f7" stroke="#9aa6bf"/><text x="530" y="163">DB 조회 도구 · QA 도구 · 백테스트</text>
+  <rect x="305" y="188" width="200" height="40" rx="5" fill="#eef6ee" stroke="#8fb58f"/><text x="315" y="213">PM 검토 · 카드 검색 (Haiku)</text>
+  <rect x="520" y="188" width="215" height="40" rx="5" fill="#eef6ee" stroke="#8fb58f"/><text x="530" y="213">렌더링 — 그 사람 말로</text>
+  <rect x="305" y="238" width="200" height="40" rx="5" fill="#fdf6e6" stroke="#d6b56a"/><text x="315" y="263">자가 점검 (세션 끝)</text>
+  <rect x="520" y="238" width="215" height="40" rx="5" fill="#fdf6e6" stroke="#d6b56a"/><text x="530" y="263">판정 스크립트 (존속/원복)</text>
+  <rect x="305" y="288" width="430" height="40" rx="5" fill="#fdf6e6" stroke="#d6b56a"/><text x="315" y="313">클렌징 루프 — 퇴근 뒤, 별도 worktree, 다음 날 첫 세션에 머지</text>
+  <!-- project repo -->
+  <rect x="290" y="372" width="460" height="110" rx="8" fill="#fff" stroke="#6a8f6a"/>
+  <text x="305" y="396" font-weight="700" fill="#3f6b3f">프로젝트 레포 .harness/ (git → 팀 전체 공유)</text>
+  <text x="305" y="420">하네스가 만든 안전장치·규칙·QA 시나리오·설정</text>
+  <text x="305" y="442">작업 기록 — 무엇을 바꿨고 효과가 있었는지</text>
+  <text x="305" y="464" fill="#777">원문·코드 조각·비밀값 없음 (숫자·상태만)</text>
+  <!-- local -->
+  <rect x="30" y="372" width="230" height="110" rx="8" fill="#fff" stroke="#888"/>
+  <text x="45" y="396" font-weight="700">PC 로컬 ~/.vmc-harness</text>
+  <text x="45" y="418">세션 원본에서 뽑은 상세·인용</text>
+  <text x="45" y="438">브레인 — 팀의 판단 카드</text>
+  <text x="45" y="458" fill="#777">원격(팀) 연결은 선택</text>
+  <!-- dev db -->
+  <rect x="30" y="500" width="230" height="90" rx="8" fill="#fff" stroke="#888"/>
+  <text x="45" y="524" font-weight="700">개발 DB</text>
+  <text x="45" y="546">읽기 전용 계정으로만 조회</text>
+  <text x="45" y="566" fill="#777">쓰기는 SQL 파일 → 사람이 적용</text>
+  <!-- session logs -->
+  <rect x="290" y="500" width="460" height="90" rx="8" fill="#fff" stroke="#888"/>
+  <text x="305" y="524" font-weight="700">에이전트 세션 기록 (Claude·Codex가 원래 남기는 것)</text>
+  <text x="305" y="546">하네스가 읽어서 배운다 — 복사하지 않는다</text>
+  <text x="305" y="566" fill="#777">첫 설치 때 과거 3개월분으로 진단</text>
+  <!-- arrows inside -->
+  <line x1="260" y1="90" x2="290" y2="105" stroke="#555" marker-end="url(#a)"/>
+  <line x1="290" y1="190" x2="262" y2="175" stroke="#555" marker-end="url(#a)"/>
+  <line x1="520" y1="352" x2="520" y2="372" stroke="#555" marker-end="url(#a)"/>
+  <line x1="145" y1="482" x2="145" y2="500" stroke="#555" marker-end="url(#a)"/>
+  <line x1="520" y1="500" x2="520" y2="482" stroke="#555"/>
+  <line x1="400" y1="500" x2="400" y2="352" stroke="#555" stroke-dasharray="4 3" marker-end="url(#a)"/>
+  <line x1="290" y1="428" x2="262" y2="428" stroke="#555" marker-end="url(#a)"/>
+  <line x1="627" y1="178" x2="262" y2="540" stroke="#bbb" stroke-dasharray="3 3" marker-end="url(#a)"/>
+  <!-- right side -->
+  <rect x="800" y="40" width="290" height="150" rx="10" fill="#fff" stroke="#6a8f6a" stroke-width="1.5"/>
+  <text x="815" y="64" font-weight="700" fill="#3f6b3f">팀원 PC들 · 팀 git 원격</text>
+  <text x="815" y="88">프로젝트 레포를 pull하면</text>
+  <text x="815" y="108">게이트·규칙·장부가 그대로 넘어간다</text>
+  <text x="815" y="128">→ 한 사람이 배운 게 팀 전체로</text>
+  <text x="815" y="152" fill="#777">push·배포는 지금처럼 사람이</text>
+  <line x1="750" y1="420" x2="800" y2="120" stroke="#6a8f6a" marker-end="url(#a)"/>
+  <rect x="800" y="250" width="290" height="190" rx="10" fill="#fff" stroke="#1B2A4A" stroke-width="1.5"/>
+  <text x="815" y="274" font-weight="700" fill="#1B2A4A">VMC 원격 서버</text>
+  <text x="815" y="298">apps/api (Vercel) · DB · R2</text>
+  <text x="815" y="320">라이선스 키 확인 · 버전별 엔진 zip</text>
+  <text x="815" y="342">클렌징 루프 잠금 (PC 중복 방지)</text>
+  <text x="815" y="370" font-weight="700" fill="#b35a3c">작업 데이터 0바이트</text>
+  <text x="815" y="392" fill="#777">세션·코드·장부는 고객 PC·레포 밖으로</text>
+  <text x="815" y="410" fill="#777">나가지 않는다</text>
+  <line x1="800" y1="320" x2="752" y2="200" stroke="#1B2A4A" stroke-dasharray="5 3" marker-end="url(#a)"/>
+  <text x="772" y="236" font-size="11.5" fill="#1B2A4A">설치</text><text x="772" y="250" font-size="11.5" fill="#1B2A4A">업데이트</text>
+  <rect x="800" y="480" width="290" height="110" rx="10" fill="#fff" stroke="#888"/>
+  <text x="815" y="504" font-weight="700">VMC (사람)</text>
+  <text x="815" y="526">엔진 릴리스 · 회귀 세트로 검증</text>
+  <text x="815" y="548">실습 중 원격 업데이트</text>
+  <text x="815" y="570" fill="#777">재방문 없이 기능 추가</text>
+</svg>
+<div class="cap">그림 1. 무엇이 어디에 있나. 하네스 엔진은 고칠 수 없게 되어 있고, 하네스가 만드는 규칙과 작업 기록은 프로젝트 레포에 있어 팀이 함께 씁니다. VMC 서버는 설치와 업데이트만 맡습니다.</div>
+</div>
+<div class="fig">
+<svg viewBox="0 0 1100 330" width="100%" font-family="-apple-system,Pretendard,sans-serif" font-size="13">
+  <defs><marker id="b" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#555"/></marker></defs>
+  <text x="10" y="22" font-weight="700" fill="#1B2A4A">사람</text>
+  <text x="10" y="132" font-weight="700" fill="#1B2A4A">에이전트</text>
+  <text x="10" y="252" font-weight="700" fill="#1B2A4A">하네스</text>
+  <line x1="80" y1="60" x2="1090" y2="60" stroke="#e2ddd0"/><line x1="80" y1="180" x2="1090" y2="180" stroke="#e2ddd0"/>
+  <!-- human -->
+  <rect x="80" y="8" width="140" height="40" rx="6" fill="#fff" stroke="#888"/><text x="92" y="33">① 개발 지시 한 줄</text>
+  <rect x="660" y="8" width="190" height="40" rx="6" fill="#fff" stroke="#d97757"/><text x="672" y="33">⑥ 승인/거절 (필요할 때만)</text>
+  <rect x="900" y="8" width="185" height="40" rx="6" fill="#fff" stroke="#888"/><text x="912" y="33">⑧ 완료 보고 읽기</text>
+  <!-- agent -->
+  <rect x="80" y="100" width="170" height="54" rx="6" fill="#fff" stroke="#888"/><text x="92" y="122">② 착수 선언</text><text x="92" y="142" fill="#777">범위 + 예상 시간·토큰</text>
+  <rect x="280" y="100" width="170" height="54" rx="6" fill="#fff" stroke="#888"/><text x="292" y="122">③ 코드 읽기·수정</text><text x="292" y="142" fill="#777">DB 조회는 하네스 도구로</text>
+  <rect x="480" y="100" width="160" height="54" rx="6" fill="#fff" stroke="#888"/><text x="492" y="122">⑤ 증거 만들기</text><text x="492" y="142" fill="#777">스크린샷·API·QA</text>
+  <rect x="900" y="100" width="185" height="54" rx="6" fill="#fff" stroke="#888"/><text x="912" y="122">⑦ 완료 보고</text><text x="912" y="142" fill="#777">범위 밖 변경 맨 위</text>
+  <!-- harness -->
+  <rect x="80" y="210" width="170" height="70" rx="6" fill="#eef6ee" stroke="#8fb58f"/><text x="92" y="232">PM 검토·카드 검색</text><text x="92" y="250" fill="#777">비동기 · 기다리지 않음</text><text x="92" y="268" fill="#777">중·대 작업만</text>
+  <rect x="280" y="210" width="170" height="70" rx="6" fill="#fbecea" stroke="#d98a80"/><text x="292" y="232">④ 안전 게이트</text><text x="292" y="250" fill="#777">긴 SELECT 중단·쓰기 차단</text><text x="292" y="268" fill="#777">보호 영역·검증물 변조</text>
+  <rect x="480" y="210" width="160" height="70" rx="6" fill="#fbecea" stroke="#d98a80"/><text x="492" y="232">완료 게이트</text><text x="492" y="250" fill="#777">하네스가 만든 증거만</text><text x="492" y="268" fill="#777">"확인했다" 문장 X</text>
+  <rect x="670" y="210" width="190" height="70" rx="6" fill="#eef6ee" stroke="#8fb58f"/><text x="682" y="232">과설계 점검·렌더링</text><text x="682" y="250" fill="#777">선언 대비 diff · 1회 축소</text><text x="682" y="268" fill="#777">그 사람 말로 쓰기</text>
+  <rect x="900" y="210" width="185" height="70" rx="6" fill="#fdf6e6" stroke="#d6b56a"/><text x="912" y="232">⑨ 자가 점검 (세션 끝)</text><text x="912" y="250" fill="#777">정정 → 학습 후보</text><text x="912" y="268" fill="#777">장부 기록 · 오버헤드 측정</text>
+  <!-- arrows -->
+  <line x1="150" y1="48" x2="150" y2="100" stroke="#555" marker-end="url(#b)"/>
+  <line x1="250" y1="127" x2="280" y2="127" stroke="#555" marker-end="url(#b)"/>
+  <line x1="165" y1="154" x2="165" y2="210" stroke="#8fb58f" stroke-dasharray="4 3" marker-end="url(#b)"/>
+  <line x1="365" y1="154" x2="365" y2="210" stroke="#d98a80" marker-end="url(#b)"/>
+  <line x1="450" y1="127" x2="480" y2="127" stroke="#555" marker-end="url(#b)"/>
+  <line x1="560" y1="154" x2="560" y2="210" stroke="#d98a80" marker-end="url(#b)"/>
+  <line x1="640" y1="245" x2="670" y2="245" stroke="#555" marker-end="url(#b)"/>
+  <line x1="640" y1="115" x2="700" y2="48" stroke="#d97757" stroke-dasharray="4 3" marker-end="url(#b)"/>
+  <line x1="860" y1="245" x2="900" y2="135" stroke="#555" marker-end="url(#b)"/>
+  <line x1="990" y1="100" x2="990" y2="48" stroke="#555" marker-end="url(#b)"/>
+  <line x1="990" y1="154" x2="990" y2="210" stroke="#d6b56a" marker-end="url(#b)"/>
+</svg>
+<div class="cap">그림 2. 작업 1건이 흐르는 법. 사람은 지시하고, 필요할 때만 승인하고, 완료 보고를 읽으면 됩니다. 작은 작업(파일 1개·3분 이하)은 검토 단계 없이 안전장치만 거칩니다.</div>
+</div>
+<div class="fig">
+<svg viewBox="0 0 1100 360" width="100%" font-family="-apple-system,Pretendard,sans-serif" font-size="13">
+  <defs><marker id="c" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#555"/></marker></defs>
+  <text x="10" y="22" font-weight="700" fill="#1B2A4A">무엇이 하네스를 바꾸나</text>
+  <rect x="10" y="40" width="260" height="56" rx="6" fill="#fff" stroke="#888"/><text x="22" y="62">사람의 명시 요청</text><text x="22" y="82" fill="#777">"앞으로 이건 막아" · 진단 제안 [추가]</text>
+  <rect x="10" y="110" width="260" height="56" rx="6" fill="#fff" stroke="#888"/><text x="22" y="132">기계 사실</text><text x="22" y="152" fill="#777">DB 종류·호환성·빌드 명령 (다시 확인)</text>
+  <rect x="10" y="180" width="260" height="56" rx="6" fill="#fff" stroke="#888"/><text x="22" y="202">학습 후보 (LLM이 정정에서 해석)</text><text x="22" y="222" fill="#777">같은 취지 2회 이상일 때만</text>
+  <rect x="10" y="250" width="260" height="56" rx="6" fill="#fff" stroke="#888"/><text x="22" y="272">클렌징 후보 (재확인 조건 포함)</text><text x="22" y="292" fill="#777">퇴근 뒤 루프가 처리</text>
+  <rect x="330" y="60" width="230" height="86" rx="8" fill="#fbecea" stroke="#d98a80"/><text x="342" y="84" font-weight="700">게이트 · 규칙</text><text x="342" y="106" fill="#555">구조 → 게이트 → 규칙 → 카드</text><text x="342" y="126" fill="#555">강한 것부터 고른다</text>
+  <rect x="330" y="180" width="230" height="56" rx="8" fill="#eef6ee" stroke="#8fb58f"/><text x="342" y="204" font-weight="700">판단 카드</text><text x="342" y="224" fill="#555">카드 밖으로 못 나감</text>
+  <rect x="330" y="250" width="230" height="56" rx="8" fill="#fdf6e6" stroke="#d6b56a"/><text x="342" y="274" font-weight="700">코드 정리</text><text x="342" y="294" fill="#555">구조 안에서만 · 동작 고정 테스트</text>
+  <line x1="270" y1="68" x2="330" y2="90" stroke="#555" marker-end="url(#c)"/>
+  <line x1="270" y1="138" x2="330" y2="118" stroke="#555" marker-end="url(#c)"/>
+  <line x1="270" y1="208" x2="330" y2="208" stroke="#555" marker-end="url(#c)"/>
+  <line x1="270" y1="278" x2="330" y2="278" stroke="#555" marker-end="url(#c)"/>
+  <rect x="620" y="140" width="210" height="110" rx="8" fill="#fff" stroke="#1B2A4A" stroke-width="1.5"/><text x="632" y="164" font-weight="700" fill="#1B2A4A">시험 기간</text><text x="632" y="186">노출 10회 · 최대 21일</text><text x="632" y="206" fill="#555">판정은 스크립트가 숫자로</text><text x="632" y="226" fill="#555">(자기 채점 금지)</text>
+  <line x1="560" y1="103" x2="620" y2="170" stroke="#555" marker-end="url(#c)"/>
+  <line x1="560" y1="208" x2="620" y2="200" stroke="#555" marker-end="url(#c)"/>
+  <line x1="560" y1="278" x2="620" y2="230" stroke="#555" marker-end="url(#c)"/>
+  <rect x="880" y="60" width="210" height="70" rx="8" fill="#eef6ee" stroke="#8fb58f"/><text x="892" y="86" font-weight="700" fill="#3f6b3f">존속</text><text x="892" y="108" fill="#555">노출 10회 · 명시적 부정 0</text>
+  <rect x="880" y="160" width="210" height="80" rx="8" fill="#fbecea" stroke="#d98a80"/><text x="892" y="186" font-weight="700" fill="#a0463b">원복</text><text x="892" y="208" fill="#555">명시적 부정 · 증거 부족</text><text x="892" y="226" fill="#555">git revert 1번</text>
+  <line x1="830" y1="170" x2="880" y2="100" stroke="#555" marker-end="url(#c)"/>
+  <line x1="830" y1="200" x2="880" y2="200" stroke="#555" marker-end="url(#c)"/>
+  <rect x="620" y="280" width="470" height="66" rx="8" fill="#fff" stroke="#d97757"/><text x="632" y="304" font-weight="700" fill="#b35a3c">사람이 실제로 한 행동만 신호로 씀</text><text x="632" y="326" fill="#555">"그냥 진행"(헛막기) · 원복/git revert · 원인 지목 · 거절 · 알림 끄기·삭제 버튼</text>
+  <line x1="720" y1="280" x2="720" y2="250" stroke="#d97757" marker-end="url(#c)"/>
+</svg>
+<div class="cap">그림 3. 하네스가 스스로 바뀌는 근거는 네 가지뿐이고, 무엇이든 시험 기간을 거칩니다. 남길지 되돌릴지는 사람이 실제로 한 행동으로만 정해서, 엉뚱한 규칙이 쌓이지 않습니다.</div>
+</div>

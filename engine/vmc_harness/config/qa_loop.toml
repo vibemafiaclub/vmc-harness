@@ -1,0 +1,23 @@
+# qa·loop 영역 설정 (spec 05·06). defaults.toml의 qa.*·loop.* 키는 거기 있는 것을 쓰고, 여기엔 새 키만.
+# 줄마다 주석 메타: unit=<단위> md=<model_dependent yes|no> spec=<근거 문서> [measured=no: 실측 전 임시값]
+
+[loop]
+model = "sonnet"               # unit=name md=yes spec=06
+find_timeout_s = 900           # unit=s md=yes spec=06 measured=no
+unit_timeout_s = 1800          # unit=s md=yes spec=06 measured=no
+test_timeout_s = 600           # unit=s md=no spec=06 measured=no
+poll_s = 2                     # unit=s md=no spec=06
+lock_ttl_s = 3600              # unit=s md=no spec=06
+expire_human_commits = 3       # unit=commits md=no spec=06 measured=no
+giant_file_lines = 800         # unit=lines md=no spec=06 measured=no
+giant_function_lines = 80      # unit=lines md=no spec=06 measured=no
+mutants_max = 6                # unit=mutants md=no spec=06 measured=no
+mutation_min_kill_ratio = 1.0  # unit=ratio md=no spec=06 measured=no
+dup_min_nodes = 30             # unit=ast_nodes md=no spec=06 measured=no
+dup_min_lines = 5              # unit=lines md=no spec=06 measured=no
+wander_min_calls = 5           # unit=tool_calls md=no spec=06 measured=no
+wander_max_sessions = 50       # unit=sessions md=no spec=06 measured=no
+power_query_timeout_s = 10     # unit=s md=no spec=06 — powercfg·pmset 조회와 caffeinate 정리 대기
+repair_max_attempts = 3        # unit=attempts md=yes spec=06 measured=no 실패 테스트 복구·진단 티켓 — 이만큼(밤마다 1회) 해 보고 안 되면 보관
+proposed_expire_days = 14      # unit=days md=no spec=06 measured=no 제안(proposed)만 하고 아무도 손대지 않은 후보는 이 기간 뒤 만료
+repair_output_tail_lines = 200 # unit=lines md=no spec=06 실패 테스트 복구 때 모델에게 주는 실패 출력 끝부분

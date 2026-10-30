@@ -1,0 +1,20 @@
+# 렌더링·브리핑·mod 영역 설정 (spec 08). defaults.toml의 render.model·render.timeout_s·approval.*는 그쪽 키를 쓴다.
+# 줄마다 주석 메타: unit=<단위> md=<model_dependent yes|no> spec=<근거 문서> [measured=no: 실측 전 임시값]
+
+[render]
+profile_vocab_max = 3000         # unit=words md=no spec=08 measured=no
+profile_objects_max = 80         # unit=names md=no spec=08 measured=no
+profile_object_min_count = 2     # unit=count md=no spec=08 measured=no
+profile_samples = 8              # unit=sentences md=no spec=08 measured=no
+sample_max_chars = 60            # unit=chars md=no spec=08 measured=no
+profile_recompute_sessions = 5   # unit=sessions md=no spec=08 measured=no
+lexicon_unclear_min = 2          # unit=count md=no spec=08
+lexicon_correction_min = 2       # unit=count md=no spec=04 — 같은 뜻 정정이 이만큼이면 모호어로(학습 후보 2회 규칙과 같게)
+term_inject_max = 3              # unit=lines md=no spec=08 measured=no — 프롬프트 한 번에 넣는 용어 뜻 줄 수 상한
+notice_keep_hours = 24           # unit=h md=no spec=08 measured=no
+recent_area_days = 14            # unit=days md=no spec=08 measured=no
+per_section = 3                  # unit=cards md=no spec=08
+pdf_timeout_s = 60               # unit=s md=no spec=08
+brief_fresh_s = 20               # unit=s md=no spec=08 measured=no
+trend_weeks = 4                  # unit=weeks md=no spec=08
+daily_lines = 2                  # unit=lines md=no spec=08
