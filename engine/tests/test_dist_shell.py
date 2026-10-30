@@ -165,6 +165,16 @@ class InstallScriptTest(DistTestCase):
         self.assertEqual(installed, (REPO / "engine" / "vmc_harness" / "dist" / "shell.py").read_text(encoding="utf-8"))
         lp = shell.launcher_path()
         self.assertTrue(lp.is_file())
+        if os.name == "nt":
+            # Windows Claude Code는 훅을 Git Bash로 돌린다 — 확장자 없는 sh 실행기로 찾혀야 한다
+            sh = shell.sh_launcher_path()
+            self.assertTrue(sh.is_file())
+            bash = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git" / "bin" / "bash.exe"
+            if bash.is_file():
+                env = dict(os.environ)
+                r = subprocess.run([str(bash), "-c", 'PATH="$(cygpath -u "$1"):$PATH"; vmc-harness --shell-version', "x",
+                                    str(shell.bin_dir())], capture_output=True, text=True, env=env)
+                self.assertEqual(r.stdout.strip(), shell.SHELL_VERSION, r.stderr)
         if os.name != "nt":
             self.assertTrue(os.stat(str(lp)).st_mode & stat.S_IXUSR)
             r = subprocess.run([str(lp), "--shell-version"], capture_output=True, text=True)

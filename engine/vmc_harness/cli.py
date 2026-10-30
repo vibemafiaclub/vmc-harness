@@ -36,6 +36,12 @@ def main(argv=None):
                 pass
     # 고객 코드를 ast.parse할 때 나오는 경고('\s' 이스케이프 등)는 하네스 오류가 아니다 — 화면·훅 출력에 섞지 않는다
     warnings.filterwarnings("ignore", category=SyntaxWarning)
+    if sys.platform == "win32":   # 0.1.5 이전 설치: 껍데기가 옛 버전이라 커널이 Git Bash 실행기를 채운다
+        try:
+            from vmc_harness.dist.shell import ensure_sh_launcher
+            ensure_sh_launcher()
+        except Exception:
+            pass
     argv = sys.argv[1:] if argv is None else list(argv)
     parser = build_parser(argv[0] if argv and argv[0] in FAST_COMMANDS else None)
     args = parser.parse_args(argv)

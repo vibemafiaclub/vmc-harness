@@ -87,6 +87,13 @@ def launcher_path():
     return bin_dir() / ("vmc-harness.cmd" if is_windows() else "vmc-harness")
 
 
+def sh_launcher_path():
+    """확장자 없는 sh 실행기. 윈도우에서도 둔다 — Windows Claude Code는 훅을 Git Bash로 돌리는데, Git Bash는
+    `vmc-harness`를 찾을 때 .exe만 붙여 보고 .cmd는 못 찾는다(Windows 실기 검증 2026-10-30: 훅 전부
+    `vmc-harness: command not found`)."""
+    return bin_dir() / "vmc-harness"
+
+
 def shell_path():
     return bin_dir() / "vmc_harness_shell.py"
 
@@ -803,14 +810,36 @@ def _win_path(add):
     return ["HKCU\\Environment\\Path"]
 
 
+def _sh_launcher_text(py=None):
+    py = py or sys.executable or "python3"
+    q = lambda s: "'" + s.replace("'", "'\\''") + "'"
+    sp = str(shell_path())
+    if is_windows():   # Git Bash(MSYS)는 C:/… 경로를 그대로 받는다
+        py, sp = py.replace("\\", "/"), sp.replace("\\", "/")
+    return ('#!/bin/sh\n# VMC 하네스 CLI 껍데기 실행기 (install.py가 만든다)\nVMH_PY=%s\n'
+            '[ -x "$VMH_PY" ] || VMH_PY="$(command -v python3 || command -v python)"\nexec "$VMH_PY" %s "$@"\n') % (q(py), q(sp))
+
+
+def ensure_sh_launcher():
+    """윈도우: Git Bash용 sh 실행기가 없으면 만든다(0.1.5 이전 설치는 .cmd만 있다). 만들었으면 True."""
+    if not is_windows() or not shell_path().is_file():
+        return False
+    lp = sh_launcher_path()
+    if lp.is_file():
+        return False
+    try:
+        _write_text_atomic(lp, _sh_launcher_text())
+        return True
+    except OSError:
+        return False
+
+
 def _launcher_text():
     py = sys.executable or ("python" if is_windows() else "python3")
     if is_windows():
         return ('@echo off\r\nset "VMH_PY=%s"\r\nif not exist "%%VMH_PY%%" set "VMH_PY=python"\r\n'
                 '"%%VMH_PY%%" "%%~dp0vmc_harness_shell.py" %%*\r\n') % py
-    q = lambda s: "'" + s.replace("'", "'\\''") + "'"
-    return ('#!/bin/sh\n# VMC 하네스 CLI 껍데기 실행기 (install.py가 만든다)\nVMH_PY=%s\n'
-            '[ -x "$VMH_PY" ] || VMH_PY="$(command -v python3)"\nexec "$VMH_PY" %s "$@"\n') % (q(py), q(str(shell_path())))
+    return _sh_launcher_text(py)
 
 
 def install_self(source, argv=None, out=print):
@@ -828,6 +857,8 @@ def install_self(source, argv=None, out=print):
     _write_text_atomic(lp, _launcher_text())
     if not is_windows():
         os.chmod(str(lp), 0o755)
+    else:
+        _write_text_atomic(sh_launcher_path(), _sh_launcher_text())   # Git Bash(Claude Code 훅)용
     changed = [] if a.no_path else register_path()
     out("VMC 하네스 CLI 설치: %s" % lp)
     if changed:
@@ -854,6 +885,7 @@ def main(argv=None):
     if argv[:1] == ["--shell-version"]:
         print(SHELL_VERSION)
         return 0
+    ensure_sh_launcher()   # 옛 윈도우 설치에 Git Bash 실행기를 채운다(PowerShell·cmd·Codex 경로로 한 번만 불려도 된다)
     eng = engine_dir()
     if not eng or not eng.is_dir():
         print("하네스 커널이 아직 없음 — 먼저: vmc-harness activate <라이선스 키>", file=sys.stderr)
