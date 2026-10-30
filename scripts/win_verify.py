@@ -658,6 +658,47 @@ class Verify:
             self.state["card_id"] = None
         self.add("init.card", "테스트 카드 추가", "pass" if self.state["card_id"] else "fail",
                  self.state["card_id"] or tail(r["out"] + r["err"], 300))
+        self._llm_checks()
+
+    def _llm_checks(self):
+        """Windows에서 claude -p에 넘긴 지시문이 온전히 가는가(2026-10-30 2차: 맥 4/4 찾는 카드를 Windows는 못 찾음)."""
+        claude = shutil.which("claude")
+        if not claude or self.a.skip_claude:
+            for cid in ("llm.argv-system", "llm.card-search"):
+                self.add(cid, cid, "skip", "claude 없음 또는 로그인 안 됨")
+            return
+        nonce = "확인-\"따옴표\"-%s" % uuid.uuid4().hex[:8]
+        system = "너는 검사기다.\n아래 확인 문자열을 그대로 한 줄로 출력하라. 다른 말은 하지 마라.\n확인 문자열: %s" % nonce
+        res = {}
+        for how in ("arg", "file"):
+            args = [claude, "-p", "--model", "haiku", "--output-format", "text", "--setting-sources", "",
+                    "--strict-mcp-config", "--no-session-persistence", "--tools", ""]
+            if how == "arg":
+                args += ["--system-prompt", system]
+            else:
+                f = self.work / "sys-prompt.txt"
+                f.write_text(system, encoding="utf-8")
+                args += ["--system-prompt-file", str(f)]
+            r = self.run(args, cwd=self.work, timeout=120, input_text="출력하라")
+            res[how] = (r["out"] or "").strip()[:200]
+        ok_file = nonce in res["file"]
+        self.add("llm.argv-system", "claude -p 지시문 전달(명령줄 인자 vs 파일)", "pass" if ok_file else "fail",
+                 "인자=%s · 파일=%s" % ("온전" if nonce in res["arg"] else "깨짐", "온전" if ok_file else "깨짐"),
+                 {"nonce": nonce, "out": res})
+        code = ("import json,sys; from vmc_harness.brain import search\n"
+                "hits=0\n"
+                "for i in range(3):\n"
+                "    r=search.select_llm('%s 검증 상황에서 무엇을 남길지', search.active_cards(), 3)\n"
+                "    hits += bool(r and r[0])\n"
+                "print(json.dumps({'hits': hits}))" % CARD_KEYWORD)
+        r = self.run([sys.executable, "-c", code], cwd=self.sandbox, timeout=300,
+                     env=self.env({"PYTHONPATH": str(self.engine)}))
+        try:
+            hits = json.loads(r["out"].strip().splitlines()[-1])["hits"]
+        except Exception:
+            hits = None
+        self.add("llm.card-search", "카드 검색(haiku) 3번 중 찾은 수 — 맥 기준 3/3", "pass" if hits and hits >= 2 else "fail",
+                 "%s/3" % hits if hits is not None else tail(r["out"] + r["err"], 300))
 
     # ================================================================ 3 백그라운드·창
     def _bg_launch(self, mode, job=None):
@@ -1040,8 +1081,9 @@ class Verify:
         rec2 = self.ledger_tasks().get(t2[-1]["task_id"]) if t2 else None
         if rec2 and rec2.get("written_at") and rec2["written_at"] not in seen_written:
             seen_written.append(rec2["written_at"])
-        self.add("claude.ledger-turns", "장부가 착수 때 쓰이고 매 턴 갱신(written_at)",
-                 "pass" if rec2 and len(seen_written) >= 2 else "fail",
+        # claude -p 한 번은 응답 한 번(턴 하나)이라 Stop은 끝에 한 번 — 강제 종료 전엔 착수 때 쓴 '진행 중' 기록이 있으면 된다
+        self.add("claude.ledger-turns", "강제 종료 전에 장부에 '진행 중' 기록이 남음(착수 때 기록·턴 끝 갱신)",
+                 "pass" if rec2 and rec2.get("status") == "open" and seen_written else "fail",
                  "세션2 장부 갱신 %d번 관찰 · status=%s · 강제 종료=%s" % (len(seen_written), (rec2 or {}).get("status"), info2["killed"]),
                  {"written_at": seen_written})
         # finalize_idle_min은 커널 설정이라 프로젝트에서 줄일 수 없다 → 로컬 작업 상태의 활동 시각을 그만큼 앞으로 당겨 시간 경과를 모사
