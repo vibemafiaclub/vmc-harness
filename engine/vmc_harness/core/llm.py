@@ -26,13 +26,27 @@ def claude_p(prompt, model="haiku", system=None, timeout=60, tools=False, cwd=No
             "--setting-sources", "", "--strict-mcp-config", "--no-session-persistence"]
     if not tools:
         args += ["--tools", ""]
+    sp_file = None
     if system:
-        args += ["--system-prompt", system]
+        # 지시문은 파일로 넘긴다 — Windows에서 한글·따옴표·줄바꿈이 든 긴 지시문을 명령줄 인자로 넘기면 깨진 채 받는 것으로
+        # 보였다(실기 검증 2026-10-30: 맥에서 4/4 찾는 카드를 Windows에선 못 찾음). 표준 입력에 섞으면 품질이 떨어진다(맥 실측 0/1).
+        import tempfile
+        fd, sp_file = tempfile.mkstemp(prefix="vmh-sys-", suffix=".txt")
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            f.write(system)
+        args += ["--system-prompt-file", sp_file]
     env = dict(os.environ)
     env["VMC_HARNESS_NESTED"] = "1"
     import time
     t0 = time.time()
-    rc, out, _ = run(args, input_text=prompt, timeout=timeout, env=env, cwd=cwd)
+    try:
+        rc, out, _ = run(args, input_text=prompt, timeout=timeout, env=env, cwd=cwd)
+    finally:
+        if sp_file:
+            try:
+                os.unlink(sp_file)
+            except OSError:
+                pass
     sec = time.time() - t0
     if rc != 0 or not out.strip():
         return None
@@ -73,7 +87,13 @@ def claude_agent(prompt, model, system=None, timeout=900, tools=("Read", "Grep",
     for d in add_dirs or []:
         args += ["--add-dir", str(d)]
     if system:
-        args += ["--system-prompt", system]
+        # Windows: 한글·따옴표·줄바꿈이 든 긴 지시문을 명령줄 인자로 넘기면 claude가 깨진 채 받는 것으로 보인다
+        # (실기 검증 2026-10-30 — 맥에서 4/4 찾는 카드를 Windows에선 못 찾음). 표준 입력 앞에 붙여 보낸다.
+        how = os.environ.get("VMC_HARNESS_LLM_SYSTEM") or ("stdin" if sys.platform == "win32" else "arg")
+        if how == "stdin":
+            prompt = system + "\n\n---\n\n" + (prompt or "")
+        else:
+            args += ["--system-prompt", system]
     env = dict(os.environ)
     env["VMC_HARNESS_NESTED"] = "1"
     env.update(env_extra or {})
