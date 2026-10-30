@@ -28,8 +28,9 @@ def claude_p(prompt, model="haiku", system=None, timeout=60, tools=False, cwd=No
         args += ["--tools", ""]
     sp_file = None
     if system:
-        # 지시문은 파일로 넘긴다 — Windows에서 한글·따옴표·줄바꿈이 든 긴 지시문을 명령줄 인자로 넘기면 깨진 채 받는 것으로
-        # 보였다(실기 검증 2026-10-30: 맥에서 4/4 찾는 카드를 Windows에선 못 찾음). 표준 입력에 섞으면 품질이 떨어진다(맥 실측 0/1).
+        # 지시문은 파일로 넘긴다 — 명령줄 길이 상한(Windows 32,767자)과 인자 따옴표 처리에 기대지 않으려고.
+        # (2026-10-30 Windows 실기: 인자·파일 모두 지시문은 온전히 갔다 — 카드 검색 차이의 원인은 아니었다.
+        #  표준 입력에 섞으면 검색 품질이 떨어진다 — 맥 실측 0/1)
         import tempfile
         fd, sp_file = tempfile.mkstemp(prefix="vmh-sys-", suffix=".txt")
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
