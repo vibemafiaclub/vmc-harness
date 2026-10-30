@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 
 from vmc_harness.core import config, paths
-from vmc_harness.core.gitutil import git
+from vmc_harness.core.gitutil import git, git_bytes
 from vmc_harness.core.jsonio import engine_writes_log, read_json, write_json
 from vmc_harness.gates import globs
 
@@ -259,6 +259,14 @@ def _revert(root, rec, rels):
                     p.unlink()          # 바뀐 증거는 무효화(완료 게이트가 새 증거를 요구)
                 continue
             if pre["status"] == "clean":
+                if "ledger" in pre["cats"]:
+                    # 하네스가 쓴 장부는 git 원본 바이트 그대로(Windows autocrlf가 LF→CRLF로 바꾸지 않게).
+                    # 고객 파일은 아래 checkout-index — 그 PC의 git이 체크아웃하는 모양 그대로
+                    rc, blob = git_bytes(root, "cat-file", "blob", ":" + rel)
+                    if rc == 0:
+                        p.parent.mkdir(parents=True, exist_ok=True)
+                        p.write_bytes(blob)
+                        continue
                 from_index.append(rel)
                 continue
             b = rec["backup"].get(rel)

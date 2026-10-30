@@ -218,6 +218,19 @@ class TestOpaqueGenerated(OpaqueCase):
         self.assertEqual(self.read("gen/api.ts"), "export const a = 1\n")
 
 
+class TestOpaqueAutocrlf(OpaqueCase):
+    """Windows 기본 core.autocrlf=true에서도 하네스 장부는 원래 바이트(LF)로 되돌린다(Windows CI에서 드러남)."""
+
+    def test_ledger_restored_byte_exact_under_autocrlf(self):
+        subprocess.run(["git", "config", "core.autocrlf", "true"], cwd=str(self.root), check=True)
+        p = self.root / ".harness/ledger/findings/F-1.json"
+        before = p.read_bytes()
+        self.assertNotIn(b"\r\n", before)
+        pre, post = self.run_cmd("python3 fix.py", lambda: p.write_text("{}", encoding="utf-8"))
+        self.assertEqual(post.get("decision"), "block")
+        self.assertEqual(p.read_bytes(), before)
+
+
 class TestOpaqueTamper(OpaqueCase):
     """검증물 변조 금지도 문자열 짐작 대신 실행 뒤 대조(현장 결함 C3·C4와 같은 부류)."""
 

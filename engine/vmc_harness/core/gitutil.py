@@ -28,3 +28,14 @@ def changed_files(root, base=None):
     if rc == 0:
         files.update(split_z(out))
     return sorted(files)
+
+
+def git_bytes(root, *args, timeout=30):
+    """(returncode, stdout 바이트) — 파일 내용을 줄끝·인코딩 변환 없이 받을 때."""
+    import subprocess
+    from vmc_harness.core.proc import no_window
+    try:
+        r = subprocess.run(GIT_BASE + list(args), cwd=str(root), timeout=timeout, capture_output=True, **no_window())
+        return r.returncode, r.stdout
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return -1, b""
