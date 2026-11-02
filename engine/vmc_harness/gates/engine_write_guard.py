@@ -31,6 +31,38 @@ _TEXT_MARKERS = [re.compile(r"\.harness[\\/]+ledger", re.I), _KERNEL_MARKER,
                  re.compile(r"\.harness[\\/]+cache[\\/]+evidence", re.I)]
 
 
+def mentions_kernel(command):
+    """명령 문자열에 엔진(L0) 경로가 보이는가 — 실행 뒤 엔진 파일 대조를 할지."""
+    if not command:
+        return False
+    expanded = os.path.expandvars(os.path.expanduser(command))
+    home_k = str(paths.kernel_root())
+    return bool(_KERNEL_MARKER.search(expanded) or (home_k and home_k in expanded))
+
+
+def kernel_changed():
+    """지금 쓰는 커널 폴더 파일 중 manifest sha256과 다른 것(상대 경로 목록). 확인할 수 없으면 []."""
+    import hashlib
+    import json
+    from vmc_harness.dist import shell as dist_shell
+    d = dist_shell.current_dir()
+    if not d:
+        return []
+    try:
+        files = (json.loads((d / dist_shell.MANIFEST).read_text(encoding="utf-8")).get("files") or {})
+    except (OSError, ValueError):
+        return []
+    bad = []
+    for rel, want in sorted(files.items()):
+        try:
+            got = hashlib.sha256((d / rel).read_bytes()).hexdigest()
+        except OSError:
+            got = None
+        if got != want:
+            bad.append(rel)
+    return bad
+
+
 def check(ctx):
     root = ctx.root
     hits = []
@@ -38,10 +70,11 @@ def check(ctx):
         for label, d in guarded_dirs(root):
             if globs.is_under(o["abs"], d):
                 hits.append((label, o.get("rel") or o["abs"]))
-    if not hits and ctx.command and ctx.state.get("shell_opaque"):
+    # 해석 못 한 셸 명령: 실행 뒤 대조(opaque_watch)가 잡혔으면 문자열로 미리 막지 않는다 — 엔진(L0)도 실행 뒤
+    # manifest 해시로 대조한다(엔진 폴더에서 복사·읽기만 하는 명령이 막히던 현장 결함 F3). 대조를 못 잡았을 때만 옛 방식.
+    if not hits and ctx.command and ctx.state.get("shell_opaque") and ctx.state.get("opaque_watch") is not True:
         expanded = os.path.expandvars(os.path.expanduser(ctx.command))
-        markers = _TEXT_MARKERS if ctx.state.get("opaque_watch") is not True else [_KERNEL_MARKER]
-        for rx in markers:
+        for rx in _TEXT_MARKERS:
             if rx.search(expanded):
                 hits.append(("하네스 기록 영역", rx.pattern.replace("[\\\\/]+", "/").replace("\\", "")))
                 break

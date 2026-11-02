@@ -23,6 +23,10 @@ conflict_disable_count = 2   # unit=count md=no spec=04
 pull_timeout_s = 5           # unit=s md=no spec=04
 model = "haiku"              # unit=name md=yes spec=04
 
+[io]
+replace_retries = 20         # unit=count md=no spec=09 measured=no — Windows: 다른 훅 프로세스가 같은 JSON 파일을 열고 있으면 교체(os.replace)가 접근 거부로 실패한다(현장 결함 F1). 그만큼 다시 시도
+replace_retry_wait_s = 0.025 # unit=s md=no spec=09 measured=no — 재시도 사이 대기(첫 대기, 시도마다 조금씩 늘림)
+
 [judge]
 exposures = 10               # unit=count md=no spec=04
 max_days = 21                # unit=days md=no spec=04

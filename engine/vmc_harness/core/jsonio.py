@@ -23,7 +23,7 @@ def write_json(path, data):
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             json.dump(data, f, ensure_ascii=False, indent=2, sort_keys=False)
             f.write("\n")
-        os.replace(tmp, str(p))
+        _replace(tmp, str(p))
         note_engine_write(p)
     except BaseException:
         try:
@@ -32,6 +32,47 @@ def write_json(path, data):
             pass
         raise
     return p
+
+
+def _windows():
+    return os.name == "nt"
+
+
+def _replace(src, dst):
+    """os.replace. Windows에서 다른 프로세스가 대상 파일을 열고 있으면 접근 거부(WinError 5·32)가 난다 —
+    병렬 도구 호출 때 훅 둘이 같은 캐시·세션 파일을 동시에 쓰는 경우(현장 결함 F1). 잠깐 기다렸다 다시 시도한다."""
+    if not _windows():
+        os.replace(src, dst)
+        return
+    from vmc_harness.core import config
+    vals = config.defaults()[0]
+    tries, wait = int(vals["io.replace_retries"]), float(vals["io.replace_retry_wait_s"])
+    for i in range(tries + 1):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if i >= tries:
+                raise
+            time.sleep(wait * (1 + i))
+
+
+def read_text_any(path):
+    """텍스트 파일 읽기 — UTF-8이 아닌 파일도 오류 없이. BOM으로 UTF-16·UTF-8-SIG를 가리고(SSMS 등이 UTF-16으로 저장),
+    그 밖에 UTF-8로 못 읽으면(바이너리·다른 인코딩) None. 없는 파일도 None."""
+    p = Path(path)
+    if not p.is_file():
+        return None
+    data = p.read_bytes()
+    if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        try:
+            return data.decode("utf-16")
+        except UnicodeDecodeError:
+            return None
+    try:
+        return data.decode("utf-8-sig" if data[:3] == b"\xef\xbb\xbf" else "utf-8")
+    except UnicodeDecodeError:
+        return None
 
 
 def append_jsonl(path, record):

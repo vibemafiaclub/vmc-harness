@@ -119,8 +119,48 @@ class TestOpaqueLedger(OpaqueCase):
             pre, post = self.run_cmd(READ_LEDGER)
         self.assertDenied(pre, "엔진 쓰기 보호")
 
-    def test_kernel_path_still_preblocked(self):
-        pre, _ = self.run_cmd("python3 -c \"open('~/.vmc-harness/kernel/0.1.4/x.py','w')\"")
+    def fake_kernel(self):
+        """설치된 커널 흉내 — kernel/<버전>/manifest.json(파일별 sha256)·.installed.json·current."""
+        import hashlib, json
+        d = self.home / "kernel" / "0.1.6"
+        f = d / "engine/vmc_harness/core/proc.py"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("x = 1\n", encoding="utf-8")
+        rel = "engine/vmc_harness/core/proc.py"
+        (d / "manifest.json").write_text(json.dumps({"version": "0.1.6", "files": {
+            rel: hashlib.sha256(f.read_bytes()).hexdigest()}}), encoding="utf-8")
+        (d / ".installed.json").write_text("{}", encoding="utf-8")
+        (self.home / "kernel" / "current").write_text("0.1.6", encoding="utf-8")
+        return f
+
+    def test_kernel_copy_out_not_preblocked(self):
+        # 현장 결함 F3: 엔진 폴더 파일을 다른 곳으로 복사(읽기)하는 해석 못 한 명령이 미리 막혔다
+        f = self.fake_kernel()
+        cmd = 'D="$HOME/Desktop/out"; mkdir -p "$D"; cp "%s" "$D/"' % f
+        pre, post = self.run_cmd(cmd)
+        self.assertAllowed(pre)
+        self.assertEqual(post, {})
+
+    def test_kernel_write_detected_after(self):
+        f = self.fake_kernel()
+        pre, post = self.run_cmd("python3 -c \"open('%s','w').write('y')\"" % f,
+                                 lambda: f.write_text("x = 2\n", encoding="utf-8"))
+        self.assertAllowed(pre)
+        self.assertEqual(post.get("decision"), "block", post)
+        self.assertIn("엔진(L0)", post["reason"])
+        self.assertIn("되돌리지 못함", post["reason"])
+
+    def test_kernel_already_changed_not_blamed(self):
+        # 실행 전부터 달랐던 엔진 파일(사람이 고친 로컬 패치)은 이번 명령 탓으로 막지 않는다
+        f = self.fake_kernel()
+        f.write_text("patched\n", encoding="utf-8")
+        pre, post = self.run_cmd("cat '%s' | python3 -" % f)
+        self.assertAllowed(pre)
+        self.assertEqual(post, {})
+
+    def test_kernel_path_preblocked_when_watch_unavailable(self):
+        with mock.patch.object(opaque_watch, "_git_list", lambda root, specs: None):
+            pre, _ = self.run_cmd("python3 -c \"open('~/.vmc-harness/kernel/0.1.4/x.py','w')\"")
         self.assertDenied(pre, "엔진 쓰기 보호")
 
 

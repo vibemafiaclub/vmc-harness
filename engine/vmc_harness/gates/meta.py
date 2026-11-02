@@ -13,6 +13,7 @@ from pathlib import Path
 
 from vmc_harness.core import ledger
 from vmc_harness.core.gitutil import git
+from vmc_harness.core.jsonio import read_text_any
 from vmc_harness.gates import globs
 
 NAME = "meta"
@@ -187,10 +188,10 @@ def judge_worktree(root):
 def simulate(ctx, rel):
     """에이전트 도구 호출이 끝난 뒤 내용(Write·Edit·MultiEdit). 판정할 수 없으면 None."""
     ti = ctx.tool_input or {}
-    p = Path(ctx.root) / rel
-    cur = p.read_text(encoding="utf-8") if p.is_file() else None
     if ctx.tool_name == "Write":
         return ti.get("content")
+    # UTF-16(BOM)도 읽고, 바이너리·다른 인코딩이면 판정할 수 없음(None) — 예외로 게이트를 깨지 않는다(현장 결함 F2)
+    cur = read_text_any(Path(ctx.root) / rel)
     if ctx.tool_name == "Edit" and cur is not None:
         old, new = ti.get("old_string", ""), ti.get("new_string", "")
         return cur.replace(old, new) if ti.get("replace_all") else cur.replace(old, new, 1)

@@ -184,10 +184,28 @@ def take(ctx):
                     pass
         write_json(_record_file(root, _key(ctx)), {
             "at_ns": time.time_ns(), "session_id": ctx.session_id, "command": (ctx.command or "")[:500],
-            "protected_globs": prot, "generated_globs": gen, "verification_globs": ver, "files": files, "backup": backup})
+            "protected_globs": prot, "generated_globs": gen, "verification_globs": ver, "files": files, "backup": backup,
+            "kernel": _kernel_before(ctx)})
         return True
     except Exception:
         return False
+
+
+def _kernel_before(ctx):
+    """명령에 엔진(L0) 경로가 보이면 실행 전 이미 manifest와 다른 파일 목록(대조 기준). 안 보이면 None."""
+    from vmc_harness.gates import engine_write_guard
+    if not engine_write_guard.mentions_kernel(ctx.command):
+        return None
+    return engine_write_guard.kernel_changed()
+
+
+def _kernel_check(rec):
+    """실행 뒤 새로 manifest와 달라진 엔진 파일. 엔진은 되돌릴 사본이 없어 알리기만 한다(복구: 같은 버전 재설치)."""
+    if rec.get("kernel") is None:
+        return []
+    from vmc_harness.gates import engine_write_guard
+    before = set(rec.get("kernel") or [])
+    return [r for r in engine_write_guard.kernel_changed() if r not in before]
 
 
 def _engine_written(root, since_ns):
@@ -297,6 +315,13 @@ def check(ctx, task):
         f.unlink()
     except OSError:
         pass
+    kern = _kernel_check(rec)
+    if kern:
+        ctx.state["opaque_gate"] = "engine_write_guard"
+        ctx.state["write_paths_after"] = []
+        res = block("엔진 쓰기 보호: 해석 못 한 셸 명령이 엔진(L0) 파일을 바꿈 — 되돌리지 못함 (%s)" % short_list(kern),
+                    "엔진 쓰기 보호: 해석 못 한 셸 명령이 엔진(L0) 파일을 바꿈 — 되돌리지 못함")
+        return res, [], ["L0:" + r for r in kern]
     ch = _changes(root, rec)
     if not ch:
         return None, [], []
