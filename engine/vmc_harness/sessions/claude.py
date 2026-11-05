@@ -4,6 +4,8 @@
 - 턴 종료: 다음 사람 메시지 전까지의 마지막 기록 시각(assistant·도구 결과·system)
 - 토큰: assistant의 message.usage — 한 응답이 블록마다 여러 줄로 쪼개져 같은 usage가 반복되므로 message.id로 한 번만
 - 서브에이전트: `<세션id>/subagents/*.jsonl`의 토큰을 더한다(시간은 부모 턴 안이라 더하지 않는다)
+- 도구 호출마다 결과가 돌아온 시각(`end`)을 남긴다 — 단계 나누기(task/phases.py, spec 13)
+- 캐시 만료 재생성(`cache_recreate`): 앞 응답과의 간격이 캐시 유지 시간을 넘었고 캐시 생성이 문맥의 절반 이상인 응답의 캐시 생성(spec 13)
 """
 
 from pathlib import Path
@@ -15,6 +17,8 @@ _NOT_HUMAN_PREFIX = ("<local-command-stdout>", "<local-command-stderr>", "<local
                      "<bash-stdout>", "<bash-stderr>", "<task-notification>", "[Request interrupted")
 _INPUT_TRIM = 2000
 USAGE_KEYS = ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
+CACHE_TTL_SEC = {"ephemeral_1h_input_tokens": 3600, "ephemeral_5m_input_tokens": 300}  # Anthropic 프롬프트 캐시 유지 시간
+RECREATE_SHARE = 0.5  # 캐시 생성이 문맥(생성+읽기)의 이 비율 이상이면 문맥을 다시 쓴 것으로 본다(spec 13)
 
 
 def _system_trigger(r):
@@ -82,14 +86,19 @@ _PART_OF = {"input_tokens": "input", "output_tokens": "output", "cache_read_inpu
 def _usage_tokens(records, windows=None, parts=None):
     """(합계, usage가 있던 응답 수, assistant 응답 수). parts(dict)를 주면 종류별로 더한다. windows 밖 응답은 뺀다."""
     seen, total, with_usage, assistants = set(), 0, 0, 0
+    prev_at = None
     for r in records:
         if r.get("type") != "assistant":
-            continue
-        if windows is not None and not in_windows(ts(r.get("timestamp")), windows):
             continue
         msg = r.get("message") or {}
         key = msg.get("id") or r.get("requestId") or r.get("uuid")
         if key in seen:
+            continue
+        at = ts(r.get("timestamp"))
+        gap = (at - prev_at).total_seconds() if at and prev_at else None
+        if at:
+            prev_at = at
+        if windows is not None and not in_windows(at, windows):
             continue
         seen.add(key)
         assistants += 1
@@ -100,6 +109,12 @@ def _usage_tokens(records, windows=None, parts=None):
             if parts is not None:
                 for k in USAGE_KEYS:
                     parts[_PART_OF[k]] = int(parts.get(_PART_OF[k]) or 0) + int(u.get(k) or 0)
+                cc, cr = int(u.get("cache_creation_input_tokens") or 0), int(u.get("cache_read_input_tokens") or 0)
+                cdet = u.get("cache_creation") if isinstance(u.get("cache_creation"), dict) else {}
+                ttl = min([CACHE_TTL_SEC[k] for k in CACHE_TTL_SEC if int(cdet.get(k) or 0) > 0] or [3600])
+                recreated = cc if gap is not None and gap > ttl and cc and cc >= RECREATE_SHARE * (cc + cr) else 0
+                if recreated:  # 있을 때만 키를 둔다(기존 tokens_detail 형식 유지)
+                    parts["cache_recreate"] = int(parts.get("cache_recreate") or 0) + recreated
     return total, with_usage, assistants
 
 
@@ -115,6 +130,14 @@ def parse(path, windows=None):
     if not records:
         return s
     prompts, tools, events, triggers = [], [], [], []
+    result_at = {}  # tool_use_id → 결과가 돌아온 시각
+    for r in records:
+        if r.get("type") == "user" and isinstance((r.get("message") or {}).get("content"), list):
+            for b in r["message"]["content"]:
+                if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("tool_use_id"):
+                    t_ = ts(r.get("timestamp"))
+                    if t_:
+                        result_at[b["tool_use_id"]] = t_
     for r in records:
         s.session_id = s.session_id or r.get("sessionId")
         s.cwd = s.cwd or r.get("cwd")
@@ -139,8 +162,14 @@ def parse(path, windows=None):
                 for b in content:
                     if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name"):
                         inp = b.get("input") or {}
-                        tools.append({"at": iso(t), "name": b["name"], "input": _trim(inp),
-                                      "paths": paths_from_input(inp)})
+                        call = {"at": iso(t), "name": b["name"], "input": inp, "paths": paths_from_input(inp), "id": b.get("id")}
+                        try:  # 단계는 잘리기 전 전체 입력으로(긴 heredoc 끝의 쓰기를 놓치지 않게 — task/phases.py)
+                            from vmc_harness.task.phases import classify
+                            call["phase"] = classify(call)
+                        except Exception:
+                            pass
+                        call["input"] = _trim(inp)
+                        tools.append(call)
     s.session_id = s.session_id or path.stem
     all_ts = [p[0] for p in prompts] + events
     if not all_ts:
@@ -161,6 +190,10 @@ def parse(path, windows=None):
         prompts = [p for p in prompts if in_windows(p[0], windows)]
         tools = [x for x in tools if in_windows(ts(x["at"]), windows)]
         turns = clip_turns(turns, windows)
+    for x in tools:
+        e = result_at.get(x.get("id"))
+        x["end"] = iso(e) if e else None
+    s.turns = turns
     s.human_prompts = [{"at": iso(t), "text": x} for t, x in prompts]
     s.human_turns = len(prompts)
     s.tool_calls = tools

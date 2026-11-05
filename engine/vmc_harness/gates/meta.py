@@ -17,7 +17,7 @@ from vmc_harness.core.jsonio import read_text_any
 from vmc_harness.gates import globs
 
 NAME = "meta"
-PROFILE_STRICTNESS = {"prototype": 0, "standard": 1, "gxp": 2}
+PROFILE_STRICTNESS = {"prototype": 0, "solo": 0, "standard": 1, "gxp": 2}
 LOOSEN_FINDINGS = ("false_block", "revert", "reject", "button")
 LOOSEN_KINDS = ("protected_shrink", "profile_loosen", "prod_allow")
 

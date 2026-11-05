@@ -7,7 +7,7 @@ from pathlib import Path
 def register(sub):
     p = sub.add_parser("init", help="이 프로젝트에 하네스 설치(훅·MCP·규칙 블록) + 부트스트랩 + 진단 리포트")
     p.add_argument("path", nargs="?", default=".", help="프로젝트 루트(프로젝트 부모 폴더, 기본 지금 폴더)")
-    p.add_argument("--profile", choices=("standard", "gxp", "prototype"), help="기본 standard")
+    p.add_argument("--profile", choices=("standard", "gxp", "prototype", "solo"), help="기본 standard")
     p.add_argument("--source-roots", nargs="*", help="소스 루트(기본 자동 탐지)")
     p.add_argument("--dry-system", action="store_true",
                    help="이 PC 사용자 설정(~/.claude/settings.json·OS 스케줄러·~/.codex)을 바꾸지 않는다")

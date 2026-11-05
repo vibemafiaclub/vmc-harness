@@ -93,6 +93,8 @@ def ledger_record(root, task, status):
                              "gate_sec": task.get("gate_sec")},
         "touch": cache.get("touch") or {"in_scope": None, "declared_used": None},
         "measured_at": task.get("measured_at"),
+        "session_ids": task.get("session_ids") or ([task["session_id"]] if task.get("session_id") else []),
+        "phases": task.get("phases"), "phases_detail": task.get("phases_detail"), "analysis": task.get("analysis"),
     }
 
 
@@ -273,6 +275,37 @@ def spawn_measure(root, task_id=None):
         return True
     except Exception:
         return False
+
+
+def adopt_resumed(root, session_id, transcript_path):
+    """이어받기(resume)로 세션 id가 바뀌었으면 앞 세션의 마지막 작업을 이 세션으로 옮긴다(spec 13).
+    새 기록 파일은 앞 기록을 같은 uuid로 복사해 담으므로(2026-11-05 실측) 첫 메시지 uuid가 같은 앞 세션을 찾는다.
+    측정은 옮긴 뒤의 세션 파일(마지막 것) 하나만 — 두 파일을 더하면 겹친 구간이 두 번 세진다. 옮긴 작업 또는 None."""
+    from vmc_harness import sessions as _s
+    if not session_id or not transcript_path or st.session_tasks(root, session_id):
+        return None
+    fu = _s.first_uuid(transcript_path)
+    if not fu:
+        return None
+    for rec in st.sessions(root):
+        old = rec.get("session_id")
+        tp = rec.get("transcript_path")
+        if not old or old == session_id or not tp or tp == transcript_path:
+            continue
+        if _s.first_uuid(tp) != fu:
+            continue
+        mine = [t for t in st.session_tasks(root, old) if t.get("end_reason") not in ("redeclare", "superseded")]
+        if not mine:
+            return None
+        t = mine[-1]
+        ids = list(t.get("session_ids") or [old])
+        if session_id not in ids:
+            ids.append(session_id)
+        t["session_ids"] = ids
+        t["session_id"] = session_id
+        st.save(root, t)
+        return t
+    return None
 
 
 def nightly(root):

@@ -87,6 +87,11 @@ def on_session_start(ctx):
             lifecycle.spawn_measure(root)
     except Exception:
         pass
+    # resume으로 세션 id가 바뀌었으면 앞 세션의 작업을 이 세션으로 잇는다(spec 13)
+    try:
+        lifecycle.adopt_resumed(root, ctx.session_id, ctx.transcript_path)
+    except Exception:
+        pass
     # resume: 이 세션의 작업이 이어지면 그 사이 바깥(사람) 변경을 스냅샷에 넣는다
     mine = st.current(root, ctx.session_id)
     if mine and mine.get("session_id") == ctx.session_id:

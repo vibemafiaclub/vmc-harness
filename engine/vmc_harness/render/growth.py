@@ -286,7 +286,17 @@ def me(root, start, end, viewer=None):
         "acceptance": acceptance(root, start, end),
         "blocked": blocked(root, start, end, rows),
         "interventions": interventions(root, start, end, rows),
+        "predict_hint": _predict_hint(tasks, start, end),
     }
+
+
+def _predict_hint(tasks, start, end):
+    """예측 회고의 사용자 행동 한 줄(spec 13 — 사람에게 할 일을 주는 건 주 1회 이 한 줄뿐)."""
+    try:
+        from vmc_harness.task.analysis import weekly_hint
+        return weekly_hint(tasks, start, end)
+    except Exception:
+        return None
 
 
 def weekly(root, ref=None):
@@ -347,13 +357,14 @@ def growth_html(data):
                    for s in data.get("slow_approvals") or []) or "<li class='dim'>없음</li>"
     body = ("<h1>하네스 성장 브리핑</h1><p class='dim'>%s · 기계 집계</p>"
             "<h2>새로 배운 판단</h2><ul>%s</ul><h2>틀렸다가 고친 것(원복)</h2><ul>%s</ul>"
-            "<h2>예측 적중 추이</h2><p>%s</p>"
+            "<h2>예측 적중 추이</h2><p>%s</p>%s"
             "<h2>제안 수용률 · 막은 것 · 개입</h2>"
             "<div class='row'><span>제안 수용률</span><span class='big'>%s</span><span class='dim'>%s</span></div>"
             "<div class='row'><span>막은 것</span><span class='big'>%d건</span><span class='dim'>헛막기 %d</span></div>"
             "<div class='row'><span>세션당 사람 개입</span><span class='big'>%s</span><span class='dim'>기준선 %s · 참고 지표</span></div>"
             "<h2>확인 응답 시간(참고 지표)</h2><ul>%s</ul>") % (
         _e(data["week"]), learned_li, fixed_li, _e(trend),
+        ("<p class='dim'>%s</p>" % _e(m["predict_hint"])) if m.get("predict_hint") else "",
         _pct(acc["rate"]) if acc else "-", ("%d개 중 %d개 추가" % (acc["shown"], acc["added"])) if acc else "진단 제안 없음",
         m["blocked"]["total"], m["blocked"]["false_block"],
         _e(iv["per_session"] if iv["per_session"] is not None else "-"), _e(iv["baseline"] if iv["baseline"] is not None else "-"),

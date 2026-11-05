@@ -90,9 +90,13 @@ def normalize(raw):
         appr = 0
     if missing:
         raise DeclareError("착수 선언에 빠진 것: " + ", ".join(missing))
-    return {"intent": intent, "scope": scope_l, "new": new_l,
-            "protected_touch": bool(raw.get("protected_touch")), "test_change": tc,
-            "predict": {"tokens": tokens, "agent_sec": agent_sec}, "approvals_expected": appr}
+    out = {"intent": intent, "scope": scope_l, "new": new_l,
+           "protected_touch": bool(raw.get("protected_touch")), "test_change": tc,
+           "predict": {"tokens": tokens, "agent_sec": agent_sec}, "approvals_expected": appr}
+    end = mask(str(raw.get("end") or "").strip())[:60]
+    if end:
+        out["end"] = end  # 어디까지 하나(문서만·커밋·배포) — 사람에게 보이는 착수 한 줄에 붙는다(spec 13)
+    return out
 
 
 def _entries(d):

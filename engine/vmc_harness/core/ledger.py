@@ -27,12 +27,12 @@ class MetaGateError(ValueError):
 
 FINDING_KINDS = ("false_block", "revert", "blame", "reject", "button")
 FINDING_BUTTONS = ("mute", "delete", "exclude")
-BASIS_TYPES = ("explicit_request", "machine_fact", "learning", "cleansing", "finding")
+BASIS_TYPES = ("explicit_request", "machine_fact", "learning", "cleansing", "finding", "predict_miss")  # predict_miss: 기계로 원인을 정한 예측 빗나감(spec 13)
 LAYERS = ("structure", "gate", "rule", "card", "code")
 ACTION_STATUSES = ("trial", "kept", "reverted", "extended", "prepared", "merged")
 HUMAN_CRITERIA = (1, 2, 3)
 # 후보 종류: 학습(LLM 해석 — 카드만) · 클렌징(재확인 조건) · 실패 테스트 복구(기준선 실패 목록 = 기계 사실) · 진단 티켓(진단 제안 → 루프 일감)
-CANDIDATE_KINDS = ("learning", "cleansing", "test_repair", "ticket")
+CANDIDATE_KINDS = ("learning", "cleansing", "test_repair", "ticket", "predict")  # predict: 예측 회고 티켓(spec 13)
 WHY_NOT_HIGHER_MAX = 200
 
 
@@ -185,7 +185,9 @@ def check_action(root, basis, layer, why_not_higher=None, human_criterion=None, 
         raise MetaGateError("명시 요청 근거에 원문 없음")
     if btype == "machine_fact" and not basis.get("command"):
         raise MetaGateError("기계 사실 근거에 읽은 명령 없음")
-    if layer == "gate" and btype not in ("explicit_request", "machine_fact", "finding"):
+    if btype == "predict_miss" and not (basis.get("ref") and basis.get("key")):
+        raise MetaGateError("예측 빗나감 근거에 티켓·원인 키 없음")
+    if layer == "gate" and btype not in ("explicit_request", "machine_fact", "finding", "predict_miss"):
         raise MetaGateError("게이트 근거는 사람 명시 요청·기계 사실뿐")
     if layer in ("rule", "card"):
         w = (why_not_higher or "").strip()

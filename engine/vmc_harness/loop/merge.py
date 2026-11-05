@@ -230,7 +230,7 @@ def morning(root):
     merged = []
     for a in prepared_actions(root):
         aid = a["action_id"]
-        if a.get("grade") not in ("A", "B"):
+        if a.get("grade") not in ("A", "B") and not (a.get("grade") == "S" and config.get("loop.structure_direct", root)):
             continue
         br = a.get("branch")
         if not br or not gitops.rev(root, "refs/heads/%s" % br):

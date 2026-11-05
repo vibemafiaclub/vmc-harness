@@ -7,7 +7,7 @@ from vmc_harness.core.jsonio import read_json
 from vmc_harness.core import paths
 
 DEFAULTS_PATH = Path(__file__).resolve().parent.parent / "config" / "defaults.toml"
-PROFILES = ("standard", "gxp", "prototype")
+PROFILES = ("standard", "gxp", "prototype", "solo")
 _cache = {}
 
 

@@ -2,6 +2,7 @@
 # 줄마다 주석 메타: unit=<단위> md=<model_dependent yes|no> spec=<근거 문서> [measured=no: 실측 전 임시값]
 
 [loop]
+structure_direct = false       # unit=bool md=no spec=13 — 06 "제안만" 열(쓰기 경로 제외)도 루프가 직접 합친다. 프로파일 solo만 켠다
 model = "sonnet"               # unit=name md=yes spec=06
 find_timeout_s = 900           # unit=s md=yes spec=06 measured=no
 unit_timeout_s = 1800          # unit=s md=yes spec=06 measured=no

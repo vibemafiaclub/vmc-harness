@@ -23,6 +23,7 @@ def register(sub):
     p.add_argument("--agent-sec", help="에이전트 작업 시간 예측(초, 사람 턴 대기 제외) P30,P50,P80")
     p.add_argument("--agent-min", help="에이전트 작업 시간 예측(분) P30,P50,P80 — --agent-sec 대신")
     p.add_argument("--approvals", type=int, help="승인 예상 건수")
+    p.add_argument("--end", help="어디까지 하나 한마디(예: 문서만, 커밋까지, 배포까지) — 사람에게 보이는 착수 한 줄에 붙는다")
     p.add_argument("--session", help="세션 id(없으면 환경변수 → 가장 최근 훅 세션)")
     p.add_argument("--agent", choices=("claude", "codex"))
     g = p.add_mutually_exclusive_group()
@@ -63,6 +64,8 @@ def _from_args(a):
         raw["predict"] = pred
     if a.approvals is not None:
         raw["approvals_expected"] = a.approvals
+    if a.end:
+        raw["end"] = a.end
     return raw
 
 

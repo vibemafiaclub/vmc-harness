@@ -22,7 +22,7 @@ from vmc_harness.core.clock import now_iso
 from vmc_harness.core.project import local_dir
 from vmc_harness.loop import activity, candidates, cleanse, detect, gitops, procx
 
-KINDS = ("test_repair", "ticket")
+KINDS = ("test_repair", "ticket", "predict")
 DIAGNOSE_KINDS = ("structure",)  # 루프 티켓으로 자동 등록하는 진단 제안 종류
 WEAKEN_RE = re.compile(r"pytest\.mark\.(skip|xfail)|pytest\.(skip|xfail)\(|unittest\.(skip|expectedFailure)|\.skipTest\(")
 _PASSED = re.compile(r"^PASSED (\S+)", re.M)
@@ -337,11 +337,68 @@ def _failed(root, cand, reason, tokens):
     return {"outcome": "archived" if archived else "failed", "reason": reason, "tokens": tokens}
 
 
+PREDICT_PROMPT = """목표: 이 영역에서 작업이 예측보다 오래 걸린 원인을 레포 구조로 없앤다.
+기계가 정한 원인: {cause} — 같은 영역 작업 {n}건에서 이 단계가 비슷한 과거 작업보다 중앙값 {excess}초 더 걸렸다.
+영역: {area}
+그 작업들이 하려던 것: {intents}
+그 작업들이 바꾼 파일: {targets}
+고르는 순서: 구조(모듈 경계·파일 배치·중복 통일·느린 검증 나누기) → 게이트(검사·테스트). 지침 문서를 늘리는 것은 마지막이다.
+제약:
+- 동작은 바꾸지 않는다. 기존 테스트가 새로 실패하면 버려진다. 테스트를 지우거나 약하게 만들지 않는다
+- 보호 영역은 고치지 않는다: {protected}
+- DB 쓰기·결재·감사 같은 쓰기 경로는 고치지 않는다
+- 외부 서비스·DB·네트워크에 닿지 않는다
+- 고칠 것이 없다고 판단하면 아무것도 바꾸지 않는다
+출력 형식: JSON 객체만. {{"done": true|false, "note": "한 줄 — 무엇을 바꿨고 앞 순위로 못 푼 이유"}}
+"""
+
+
+def repo_checks(root, wt, base, head, files):
+    """구조 직접 합치기(loop.structure_direct, spec 13)의 통과 기준 — 사람 커밋과 같은 게이트.
+    레포 커밋 훅(pre-commit, 없으면 통과) + 빌드(.harness/config.json build_cmd가 있으면 그것, 없으면 merge.build_ok). (ok, 이유)."""
+    import json
+    from vmc_harness.loop import fixation, merge
+    rc, intr = fixation.run_tests(root, wt, ["git", "hook", "run", "--ignore-missing", "pre-commit"])
+    if rc != 0 or intr:
+        return False, "커밋 훅 실패"
+    try:
+        cmd = (json.loads((Path(root) / ".harness" / "config.json").read_text(encoding="utf-8")) or {}).get("build_cmd")
+    except (OSError, ValueError):
+        cmd = None
+    if cmd:
+        rc, intr = fixation.run_tests(root, wt, list(cmd) if isinstance(cmd, list) else fixation._split(cmd))
+        return (rc == 0 and not intr), (None if rc == 0 and not intr else "빌드 실패")
+    ok = merge.build_ok(root, wt, base, head, files)
+    return ok, (None if ok else "빌드 실패")
+
+
+def _record_direct(root, cand, branch, base, head, changed, wt):
+    """구조 직접 합치기 준비(S등급). 아침 머지가 리베이스 뒤 repo_checks를 다시 돌리고 합친다."""
+    from vmc_harness.loop import merge
+    layer = "code" if merge.structure_unchanged(wt, base, head)[0] else "structure"
+    area = changed[0]
+    extra = {"grade": "S", "branch": branch, "base": base, "candidate_id": cand["candidate_id"],
+             "change": "structure_direct", "loop_kind": cand["kind"], "pin_tests": [], "rerun": {"repo_checks": True},
+             "area": area, "files": list(changed)[:50], "module": detect.module_of(root, area), "prepared_at": now_iso()}
+    if cand["kind"] == "predict":
+        key = cand.get("predict_key") or "%s|%s" % (cand.get("area") or "-", cand.get("cause"))
+        basis = {"type": "predict_miss", "ref": cand["candidate_id"], "key": key}
+        extra["predict"] = {"key": key, "cause": cand.get("cause"), "phase": cand.get("phase") or cand.get("cause"),
+                            "area": cand.get("area"), "baseline_excess": cand.get("baseline_excess")}
+        hyp = "%s — 이 영역 %s 초과가 줄어든다" % (cand.get("summary"), cand.get("phase") or cand.get("cause"))
+        target = {"predict": key}
+    else:
+        basis = {"type": "cleansing", "ref": cand["candidate_id"]}
+        hyp = "진단 제안(구조 직접) — %s" % cand.get("summary")
+        target = {"area": area}
+    return ledger.create_action(root, basis, layer, hyp, target=target, status="prepared", extra=extra)
+
+
 def _propose(root, cand, branch, reason, verified):
     """원본 코드 변경 — 머지하지 않고 브랜치를 남겨 제안(01 P4 — 승인 요청이 아니라 알림)."""
     from vmc_harness.core import notices
     a = cand.get("anchor") or {}
-    what = "실패 테스트 복구" if cand["kind"] == "test_repair" else "진단 제안"
+    what = {"test_repair": "실패 테스트 복구", "predict": "예측 회고"}.get(cand["kind"], "진단 제안")
     notices.add(root, "loop_ticket_proposal", "flow",
                 "%s 준비됨(반영 안 함 — %s): %s · 브랜치 %s · %s" % (what, reason, cand.get("summary"), branch, verified),
                 area=a.get("path"), refs={"candidate_id": cand["candidate_id"], "branch": branch, "reason": reason})
@@ -404,6 +461,13 @@ def process(root, cand, deadline=None):
             out_path.write_text("\n".join(r0["output"].splitlines()[-tail:]), encoding="utf-8")
             prompt = REPAIR_PROMPT.format(d=d, tests=", ".join(still), out_path=str(out_path), protected=protected)
             add_dirs = [out_path.parent]
+        elif kind == "predict":
+            from vmc_harness.task.analysis import LABEL
+            prompt = PREDICT_PROMPT.format(cause=LABEL.get(cand.get("cause"), cand.get("cause")),
+                                           n=len(cand.get("task_ids") or []), excess=cand.get("baseline_excess"),
+                                           area=cand.get("area") or "루트", intents=" / ".join(cand.get("intents") or []) or "-",
+                                           targets=", ".join(cand.get("targets") or []) or "적지 않음", protected=protected)
+            still, add_dirs = [], None
         else:
             p = _proposal_detail(root, cand)
             prompt = TICKET_PROMPT.format(title=cand.get("summary"), blocks=cand.get("blocks") or p.get("blocks") or "-",
@@ -459,6 +523,21 @@ def process(root, cand, deadline=None):
         from vmc_harness.loop import merge
         tests_only = all(detect.is_test_path(f) for f in changed) and merge.structure_unchanged(wt, main_sha, head)[0]
         weak = weakened(wt, main_sha, head, [f for f in changed if detect.is_test_path(f)])
+        if not tests_only and not weak and config.get("loop.structure_direct", root) \
+                and not any(candidates.is_write_path(root, f) for f in changed):
+            ok, why = repo_checks(root, wt, main_sha, head, changed)
+            if not ok:
+                return _failed(root, cand, why, tokens)
+            try:
+                action = _record_direct(root, cand, branch, main_sha, head, changed, wt)
+            except ledger.MetaGateError as e:
+                return {"outcome": "skipped", "reason": str(e), "tokens": tokens}
+            commits = cleanse._rewrite_trailers(wt, branch, main_sha, action["action_id"])
+            ledger.update_action(root, action["action_id"], commits=commits)
+            ledger.update_candidate(root, cid, status="prepared", action_id=action["action_id"], branch=branch,
+                                    verified="커밋 훅·빌드 통과")
+            keep_branch = True
+            return {"outcome": "prepared", "reason": None, "tokens": tokens, "action_id": action["action_id"], "grade": "S"}
         if not tests_only or weak or nf is None:
             keep_branch = True
             why = weak or ("원본 코드 수정 필요" if not tests_only else "검증 못 함")
@@ -498,6 +577,9 @@ def _record_action(root, cand, branch, base, changed, still):
 def morning_recheck(root, wt, action, base):
     """아침 머지 직전(리베이스 뒤) 다시 판정. (ok, 이유)."""
     rr = action.get("rerun") or {}
+    if rr.get("repo_checks"):  # 구조 직접 합치기(S) — 리베이스 뒤 커밋 훅·빌드를 다시
+        head = gitops.rev(wt, "HEAD")
+        return repo_checks(root, wt, base, head, gitops.changed_files(wt, base, head))
     if rr.get("ids"):
         res = run_pytest(root, wt, rr.get("dir") or ".", ids=rr["ids"])
         if not res["ran"] or not all(target_passed(t, res) for t in rr["ids"]):

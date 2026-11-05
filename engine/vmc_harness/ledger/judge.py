@@ -85,9 +85,45 @@ def deadline_of(action, root=None):
     return c + _dt.timedelta(days=config.get("judge.max_days", root))
 
 
+def _evaluate_predict(root, action, findings, at):
+    """예측 빗나감 조치(spec 13): 노출 = 머지 뒤 그 영역에서 분석된 작업, 그 원인 단계의 초과 중앙값이 조치 전보다
+    작으면 존속, 아니면 원복. 기간이 끝났는데 노출이 모자라면 구조 조치는 판정을 미루고(extended) 나머지는 원복."""
+    from vmc_harness.task.analysis import _median
+    need = config.get("judge.exposures", root)
+    pr = action.get("predict") or {}
+    start = parse_iso(action.get("merged_at")) or trial_start(action) or at
+    vals = []
+    for t in core_ledger.read_tasks(root):
+        an = t.get("analysis") or {}
+        ex = (an.get("excess") or {}).get(pr.get("phase"))
+        if ex is None or (parse_iso(t.get("ended_at")) or start) <= start:
+            continue
+        if pr.get("area") not in ("-", None) and pr.get("area") not in (an.get("area") or []):
+            continue
+        vals.append(float(ex))
+    hard, fb = negatives(action, findings)
+    base = pr.get("baseline_excess")
+    med = _median(vals[-need:]) if vals else None
+    nums = {"exposures": len(vals), "negatives": hard + fb, "false_blocks": fb, "needed": need,
+            "excess_before": base, "excess_after": med}
+    if hard:
+        return "reverted", "명시적 부정 %d건" % hard, nums
+    if len(vals) >= need and base is not None:
+        if med < float(base):
+            return "kept", "그 영역 %s 초과 중앙값 %.0f초 → %.0f초" % (pr.get("phase"), float(base), med), nums
+        return "reverted", "그 영역 %s 초과가 줄지 않음(%.0f초 → %.0f초)" % (pr.get("phase"), float(base), med), nums
+    if at >= deadline_of(action, root):
+        if action.get("layer") == "structure":
+            return "extended", "구조 조치 — 노출 부족(%d/%d)으로 판정을 미룸" % (len(vals), need), nums
+        return "reverted", "기간 종료, 노출 부족(%d/%d) — 입증되지 않음" % (len(vals), need), nums
+    return None, "시험 중", nums
+
+
 def evaluate(root, action, findings, rows, at=None):
     """판정 1건. 반환 (result|None, reason, numbers). result: kept|reverted|extended|None(계속 시험)."""
     at = at or now()
+    if (action.get("basis") or {}).get("type") == "predict_miss":
+        return _evaluate_predict(root, action, findings, at)
     need = config.get("judge.exposures", root)
     fb_limit = config.get("judge.false_block_immediate", root)
     since = count_since(action)
@@ -145,6 +181,14 @@ def judge_actions(root, at=None):
             rec = revert.revert_action(root, a["action_id"], reason, by_human=False)
             if rec.get("status") != "reverted":
                 verdict["deferred"] = rec.get("deferred")
+                if (a.get("basis") or {}).get("type") == "predict_miss" and a.get("layer") == "structure":
+                    # 위에 커밋이 쌓여 되돌리지 못한 구조 조치 — 원복을 새 구조 작업(티켓)으로 연다(spec 13)
+                    c = core_ledger.create_candidate(root, "predict", "원복을 구조 작업으로: %s" % (a.get("hypothesis") or "")[:80])
+                    core_ledger.update_candidate(root, c["candidate_id"], revert_of=a["action_id"],
+                                                 predict_key="revert|%s" % a["action_id"],
+                                                 cause=(a.get("predict") or {}).get("cause"),
+                                                 area=(a.get("predict") or {}).get("area"),
+                                                 targets=list(a.get("files") or [])[:20])
             core_ledger.update_action(root, a["action_id"], trial=trial)
         elif result == "kept":
             core_ledger.update_action(root, a["action_id"], status="kept", trial=trial)

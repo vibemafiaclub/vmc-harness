@@ -38,6 +38,7 @@ class Session:
     agent_sec: float = 0.0
     human_turns: int = 0
     measured: bool = False
+    turns: List[Any] = field(default_factory=list)   # [(start_dt, end_dt)] 작업 구간과 겹친 턴(단계 나누기 — task/phases.py)
 
     def work_tokens(self):
         """캐시 읽기를 뺀 토큰(입력 + 캐시 생성 + 출력). 나눈 값이 없으면 tokens 그대로."""
@@ -71,6 +72,25 @@ def clip_turns(turns, windows):
             if b > a:
                 out.append((a, b))
     return out
+
+
+def first_uuid(path, limit=200):
+    """세션 기록의 첫 메시지 uuid. 이어받기(resume)로 세션 id가 바뀌면 새 파일이 앞 기록을 같은 uuid·타임스탬프로
+    복사해 담는다(2026-11-05 실측) — 같은 대화인지 이 값으로 가른다. 못 읽으면 None."""
+    try:
+        with open(path, encoding="utf-8", errors="ignore") as f:
+            for i, line in enumerate(f):
+                if i >= limit:
+                    break
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(r, dict) and r.get("uuid") and r.get("type") in ("user", "assistant"):
+                    return r["uuid"]
+    except OSError:
+        return None
+    return None
 
 
 def claude_root():

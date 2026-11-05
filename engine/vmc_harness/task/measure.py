@@ -86,14 +86,16 @@ def similar_text(items):
 
 
 def estimate_line(declare):
-    """개발자에게 보일 한 줄 "예상 8~15분"(P50~P80)."""
+    """개발자에게 보일 한 줄 "예상 8~15분 · 끝: 커밋까지"(P50~P80과 어디까지 하는지 — 끝이 틀렸으면 사람이 바로잡는다, spec 13)."""
     sec = (declare.get("predict") or {}).get("agent_sec") or {}
     lo, hi = sec.get("p50"), sec.get("p80")
     if lo is None or hi is None:
         return None
     a = max(1, int(math.ceil(float(lo) / 60.0)))
     b = max(a, int(math.ceil(float(hi) / 60.0)))
-    return "예상 %d~%d분" % (a, b) if b != a else "예상 %d분" % a
+    line = "예상 %d~%d분" % (a, b) if b != a else "예상 %d분" % a
+    end = str(declare.get("end") or "").strip()
+    return "%s · 끝: %s" % (line, end) if end else line
 
 
 def calibration(tasks):
@@ -245,12 +247,18 @@ def finalize(root, task, transcript_path=None, agent=None):
     tp = _transcript(root, task, transcript_path)
     actual = {"tokens": None, "tokens_detail": None, "agent_sec": None, "tool_calls": None, "human_turns": None,
               "measured": False}
+    phase_v, phase_d = None, None
     if tp:
         try:
             from vmc_harness import sessions
             s = sessions.parse(tp, agent, windows=windows(task))
             if s.measured:
                 actual = actual_of(s)
+                try:  # 단계 나누기(spec 13) — 실패해도 실측은 남긴다
+                    from vmc_harness.task import phases as _ph
+                    phase_v, phase_d = _ph.compute(s)
+                except Exception:
+                    phase_v, phase_d = None, None
         except Exception:
             pass
     od = dict(task.get("overdesign") or {})
@@ -274,6 +282,7 @@ def finalize(root, task, transcript_path=None, agent=None):
                                        + float(over.get("declare_sec") or 0), 3),
         "gate_sec": round(hook_sec, 3) if hook_sec is not None else None,
         "actual": actual, "measure_pending": False, "measured_at": now().isoformat(timespec="seconds"),
+        "phases": phase_v, "phases_detail": phase_d, "analysis": None,
         "overdesign": dict(task.get("overdesign") or {}, **{k: od.get(k) for k in ("lines_after", "trimmed")}),
         "evidence_list": task.get("evidence_list") or [], "scope_cache": task.get("scope_cache"),
     }

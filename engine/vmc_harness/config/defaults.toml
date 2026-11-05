@@ -90,5 +90,9 @@ base_url = "https://api.vibemafiaclub.com"  # unit=url md=no spec=10
 loop.enabled = false         # spec=06 GMP 변경관리 — 클렌징 루프 자체를 끈다
 loop.auto_merge = false
 
+[profile.solo]
+predict_loop.enabled = true   # spec=13 개발자 한 사람이 곧 결정권자인 레포 — 예측 학습 루프를 켠다
+loop.structure_direct = true  # spec=13 루프가 구조 변경도 직접 합친다(2026-11-05 최수민)
+
 [profile.prototype]
 judge.exposures = 5

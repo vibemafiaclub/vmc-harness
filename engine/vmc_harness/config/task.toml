@@ -1,6 +1,13 @@
 # task 영역 설정 (spec 03·09). defaults.toml과 같은 주석 메타 형식. 키 중복 금지.
 # 줄마다 주석 메타: unit=<단위> md=<model_dependent yes|no> spec=<근거 문서> [measured=no: 실측 전 임시값]
 
+[predict_loop]
+enabled = false                  # unit=bool md=no spec=13 — 예측 학습 루프. 프로파일 solo만 켠다
+miss_repeat = 2                  # unit=tasks md=no spec=13 measured=no — 같은 영역·같은 원인 빗나감이 이만큼 쌓여야 조치
+similar_min = 3                  # unit=tasks md=no spec=13 measured=no — 비슷한 과거 실측이 이보다 적으면 원인을 기계로 정하지 않는다(unknown)
+calib_tolerance = 0.10           # unit=ratio md=no spec=13 measured=no — 적중률 허용 오차(30·50·80% ±)
+calib_min_n = 20                 # unit=tasks md=no spec=13 measured=no — 보정을 판정하는 최소 표본
+
 [task]
 similar_top_k = 3                # unit=tasks md=no spec=03 — 착수 시점 "비슷한 과거 작업 실측" 개수
 similar_min_score = 0.2          # unit=ratio md=no spec=03 measured=no — 범위·의도 겹침 하한

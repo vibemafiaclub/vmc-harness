@@ -75,6 +75,11 @@ def upkeep(root):
     except Exception as e:
         out["judge_error"] = str(e)[:200]
         health.record_failure(root, "loop_tick", e)
+    try:  # 예측 학습 루프(spec 13) — LLM 없이 원인 판정·티켓. 꺼져 있으면 아무것도 안 한다
+        from vmc_harness.task import analysis
+        out["predict"] = analysis.run(root)
+    except Exception as e:
+        health.record_failure(root, "predict_loop", e)
     try:
         out["expired"] = candidates.expire_proposed(root)
     except Exception as e:

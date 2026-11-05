@@ -262,7 +262,7 @@ def expire_proposed(root, at=None):
 
 
 # 루프 처리 순서(종류): 안전망 복구(기준선 실패 테스트) → 진단 제안 티켓 → 클렌징. 같은 종류 안에서는 헤맨 영역부터
-LOOP_KINDS = ("test_repair", "ticket", "cleansing")
+LOOP_KINDS = ("test_repair", "ticket", "predict", "cleansing")  # predict: 예측 회고 조치(spec 13)
 
 
 def open_candidates(root, kinds=("cleansing",)):
