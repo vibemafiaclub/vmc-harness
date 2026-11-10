@@ -38,11 +38,12 @@ class OverdesignTest(HarnessTestCase):
         return dec.declare(self.root, d)["task"]
 
     def _kinds(self, task):
+        task = st.by_id(self.root, task["task_id"]) or task
         return {(s["kind"], s.get("name") or s.get("path")) for s in overdesign.machine_signals(self.root, task)}
 
     def test_new_file_and_module(self):
         t = self._task()
-        self.write("app/newpkg/helpers.py", "def _x():\n    return 1\n")
+        self.agent_write("app/newpkg/helpers.py", "def _x():\n    return 1\n")
         k = self._kinds(t)
         self.assertIn(("new_file_out_of_scope", "app/newpkg/helpers.py"), k)
         self.assertIn(("new_module_out_of_scope", "app/newpkg"), k)
@@ -51,9 +52,9 @@ class OverdesignTest(HarnessTestCase):
 
     def test_new_dependency(self):
         t = self._task()
-        self.write("package.json", json.dumps({"dependencies": {"react": "1", "lodash": "4"}}))
-        self.write("requirements.txt", "requests==2\nhttpx>=0.1  # comment\n")
-        self.write("pyproject.toml", '[project]\nname = "x"\ndependencies = ["flask>=2", "pkg[extra]>=1", "pydantic"]\n')
+        self.agent_write("package.json", json.dumps({"dependencies": {"react": "1", "lodash": "4"}}))
+        self.agent_write("requirements.txt", "requests==2\nhttpx>=0.1  # comment\n")
+        self.agent_write("pyproject.toml", '[project]\nname = "x"\ndependencies = ["flask>=2", "pkg[extra]>=1", "pydantic"]\n')
         k = self._kinds(t)
         for name in ("lodash", "httpx", "pydantic"):
             self.assertIn(("new_dependency", name), k)
@@ -63,10 +64,10 @@ class OverdesignTest(HarnessTestCase):
 
     def test_unreferenced_public(self):
         t = self._task()
-        self.write("app/billing.py", DUP + "\n\ndef use():\n    return total_price([], 0)\n\n"
+        self.agent_write("app/billing.py", DUP + "\n\ndef use():\n    return total_price([], 0)\n\n"
                                          "def export_csv(rows):\n    return rows\n\n"
                                          "def used_one():\n    return 1\n\nX = used_one()\n")
-        self.write("web/a.ts", "export function formatWon(n: number) { return n }\nexport const GET = 1\n")
+        self.agent_write("web/a.ts", "export function formatWon(n: number) { return n }\nexport const GET = 1\n")
         k = self._kinds(t)
         self.assertIn(("unreferenced_public", "export_csv"), k)
         self.assertNotIn(("unreferenced_public", "used_one"), k)
@@ -75,7 +76,7 @@ class OverdesignTest(HarnessTestCase):
 
     def test_single_impl_abstraction_and_convention(self):
         t = self._task()
-        self.write("app/billing.py", DUP + "\n\ndef use():\n    return total_price([], 0)\n\n"
+        self.agent_write("app/billing.py", DUP + "\n\ndef use():\n    return total_price([], 0)\n\n"
                                          "from typing import Protocol\n\n"
                                          "class _PriceRepo(Protocol):\n    def get(self): ...\n\n"
                                          "class MssqlPriceRepo:\n    def get(self):\n        return 1\n\n"
@@ -95,14 +96,14 @@ class OverdesignTest(HarnessTestCase):
                     sys.modules.pop(k, None)
                 else:
                     sys.modules[k] = v
-        self.write("web/b.ts", "export interface Store { get(): number }\nclass A implements Store { get() { return 1 } }\n"
+        self.agent_write("web/b.ts", "export interface Store { get(): number }\nclass A implements Store { get() { return 1 } }\n"
                                "export const s = new A()\nconsole.log(s)\n")
         self.assertIn(("single_impl_abstraction", "Store"), self._kinds(t))
 
     def test_near_duplicate(self):
         t = self._task()
         copy = DUP.replace("total_price", "sum_cost").replace("items", "lines").replace("total", "acc")
-        self.write("app/billing.py", DUP + "\n\ndef use():\n    return total_price([], 0) + sum_cost([], 0)\n\n" + copy)
+        self.agent_write("app/billing.py", DUP + "\n\ndef use():\n    return total_price([], 0) + sum_cost([], 0)\n\n" + copy)
         k = self._kinds(t)
         self.assertIn(("near_duplicate_function", "sum_cost"), k)
 

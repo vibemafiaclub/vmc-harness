@@ -281,7 +281,7 @@ class SnapshotTest(HarnessTestCase):
         st.session_touch(self.root, "S1", "claude")
         t = dec.declare(self.root, raw("x 수정", ["src/x.py"]), session_id="S1")["task"]
         self.assertEqual(scope.touched(self.root, t), [])
-        self.write("src/x.py", "x = 2\n")
+        self.agent_write("src/x.py", "x = 2\n")
         t = st.by_id(self.root, t["task_id"])
         self.assertEqual(scope.touched(self.root, t), ["src/x.py"])
         self.assertEqual(scope.touch_ratio(self.root, t)["in_scope"], 1.0)
@@ -290,10 +290,12 @@ class SnapshotTest(HarnessTestCase):
             b"# team rules\r\n- keep it small\r\n\r\n" + BEGIN.encode() + b"\r\n- rule 2\r\n" + END.encode() + b"\r\n")
         self.assertEqual(scope.touched(self.root, t), ["src/x.py"])
         # 사람이 작업 중 미리 바꿔 둔 파일을 다시 고치면 그건 이번 작업이 바꾼 것
-        self.write("fe/src/components/NavTabs.tsx", "export const T = 3;\n")
+        self.agent_write("fe/src/components/NavTabs.tsx", "export const T = 3;\n")
+        t = st.by_id(self.root, t["task_id"])
         self.assertEqual(scope.touched(self.root, t), ["fe/src/components/NavTabs.tsx", "src/x.py"])
         # AGENTS.md의 사람 영역을 고치면 이번 작업
         (self.root / "AGENTS.md").write_bytes(b"# team rules v2\r\n")
+        scope.record_writes(t, ["AGENTS.md"])
         self.assertIn("AGENTS.md", scope.touched(self.root, t))
 
     def test_korean_path_not_escaped_and_garbage_edit_paths_dropped(self):
@@ -302,7 +304,7 @@ class SnapshotTest(HarnessTestCase):
         self.write("docs/보고서.md", "# 보고서\n")
         self.write("src/x.py", "x = 9\n")
         t = st.by_id(self.root, t["task_id"])
-        t["edits"] = ["!before.activities.some", "!gone.includes", "docs/보고서.md"]   # 셸 명령 조각이 섞인 기록
+        t["edits"] = ["!before.activities.some", "!gone.includes", "docs/보고서.md", "src/x.py"]   # 셸 명령 조각이 섞인 기록
         st.save(self.root, t)
         files = scope.touched(self.root, t)
         self.assertEqual(files, ["docs/보고서.md", "src/x.py"])
@@ -338,7 +340,8 @@ class GatesShareSnapshotTest(HarnessTestCase):
         from vmc_harness.gates import completion, evidence
         clock.set_fake_now(at(0, 9, 0))
         t = dec.declare(self.root, raw("주문 페이지", ["fe/src/pages/Orders.tsx", "docs/note.md"]), session_id="S1")["task"]
-        page = self.write("fe/src/pages/Orders.tsx", "export default 2;\n")
+        page = self.agent_write("fe/src/pages/Orders.tsx", "export default 2;\n")
+        t = st.by_id(self.root, t["task_id"])
         os.utime(str(page), (at(0, 9, 1).timestamp(),) * 2)
         self.assertIsNotNone(completion.evaluate(str(self.root), "S1", t))
         clock.set_fake_now(at(0, 9, 2))
@@ -348,7 +351,8 @@ class GatesShareSnapshotTest(HarnessTestCase):
         m1 = evidence.screenshot(str(self.root), t["task_id"], str(shot), "주문 목록")
         self.assertIsNone(completion.evaluate(str(self.root), "S1", t))
         # 문서 편집은 증거를 무효로 만들지 않는다(C5)
-        doc = self.write("docs/note.md", "n2\n")
+        doc = self.agent_write("docs/note.md", "n2\n")
+        t = st.by_id(self.root, t["task_id"])
         os.utime(str(doc), (at(0, 9, 5).timestamp(),) * 2)
         self.assertIsNone(completion.evaluate(str(self.root), "S1", t))
         # 같은 스크린샷을 다시 등록해도 한 번만(C5)
@@ -369,7 +373,7 @@ class GatesShareSnapshotTest(HarnessTestCase):
                           command="sqlcmd -Q 'DELETE FROM t'")
         gstate.record_block(str(self.root), pre, "db_direct", "DB 직접 접속 차단됨", gate_id="kernel:db_direct")
         dec.declare(self.root, raw("주문 페이지", ["fe/src/pages/Orders.tsx"]), session_id="S1")
-        self.write("src/extra_helper.py", "def unused_helper(a):\n    return a\n")
+        self.agent_write("src/extra_helper.py", "def unused_helper(a):\n    return a\n")
         clock.set_fake_now(at(0, 9, 3))
         stop = HookContext("Stop", "claude", {}, root=str(self.root), session_id="S1", cwd=str(self.root))
         r = handlers.on_stop(stop)

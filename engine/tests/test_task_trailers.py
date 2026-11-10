@@ -42,8 +42,8 @@ class TrailerTest(HarnessTestCase):
         t = dec.declare(self.root, raw())["task"]
         hook = trailers.install_commit_hook(self.root)
         self.assertTrue(hook.is_file())
-        self.write("src/list.py", "a = 2\n")
-        self.write("src/other.py", "b = 2\n")
+        self.agent_write("src/list.py", "a = 2\n")
+        self.agent_write("src/other.py", "b = 2\n")
         self.write(".harness/gates/g1.json", "{}\n")
         self.write(".harness/ledger/tasks/x.jsonl", "{}\n")
         env = dict(os.environ, PYTHONPATH=ENGINE, VMC_HARNESS_SESSION_ID="S1")
@@ -78,9 +78,9 @@ class TrailerTest(HarnessTestCase):
 
     def test_report_block(self):
         dec.declare(self.root, raw())
+        self.agent_write("src/list.py", "a = 3\n")
+        self.agent_write("src/other.py", "b = 3\nc = 4\n")
         st_task = st.current(self.root, "S1")
-        self.write("src/list.py", "a = 3\n")
-        self.write("src/other.py", "b = 3\nc = 4\n")
         report.record_reason(self.root, st_task, "src/other.py", "폭 조정으로 메뉴 항목 1개 숨김")
         rec = report.build(self.root, st.current(self.root, "S1"))
         lines = rec["text"].splitlines()

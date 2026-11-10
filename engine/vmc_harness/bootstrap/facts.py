@@ -447,16 +447,23 @@ def detect_behavior_globs(root, source_roots, commands, sql_patch):
         base = root / d
         pre = "" if d == "." else d + "/"
         pj = base / "package.json"
-        if pj.is_file():
+        # 모노레포(apps/<앱>/package.json): 소스 루트 바로 아래 앱 폴더도 본다. 못 찾으면 page가 기본값(레포 전체 *.html·templates/**)으로
+        # 떨어져 문서용 HTML·메시지 템플릿 JSON까지 페이지 변경이 된다(현장 결함 — 완료 게이트 오탐)
+        apps = [(base, pre)] if pj.is_file() else []
+        if not pj.is_file() and base.is_dir():
+            for c in sorted(base.iterdir()):
+                if c.is_dir() and c.name not in util.IGNORE_DIRS and not c.name.startswith(".") and (c / "package.json").is_file():
+                    apps.append((c, pre + c.name + "/"))
+        for abase, apre in apps:
             for sub in ("src/app", "app", "src/pages", "pages", "src/components", "components", "src/views", "views"):
-                if (base / sub).is_dir():
-                    page.append(pre + sub + "/**")
+                if (abase / sub).is_dir():
+                    page.append(apre + sub + "/**")
             for sub in ("src/app/api", "app/api", "src/pages/api", "pages/api"):
-                if (base / sub).is_dir():
-                    api.append(pre + sub + "/**")
+                if (abase / sub).is_dir():
+                    api.append(apre + sub + "/**")
             for f in ("src/middleware.ts", "middleware.ts", "src/middleware.js", "middleware.js"):
-                if (base / f).is_file():
-                    api.append(pre + f)
+                if (abase / f).is_file():
+                    api.append(apre + f)
         for dirpath, dirnames, _ in os.walk(str(base)):
             dirnames[:] = [x for x in dirnames if x not in util.IGNORE_DIRS and not x.startswith(".")]
             name = Path(dirpath).name

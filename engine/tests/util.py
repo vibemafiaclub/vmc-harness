@@ -46,6 +46,15 @@ class HarnessTestCase(unittest.TestCase):
         p.write_text(text, encoding="utf-8")
         return p
 
+    def agent_write(self, rel, text, sid="S1"):
+        """에이전트 편집 — 훅이 남기는 것처럼 그 세션의 진행 중 작업 편집 목록에도 적는다."""
+        from vmc_harness.task import scope, state as tstate
+        p = self.write(rel, text)
+        t = tstate.current(self.root, sid) or (tstate.open_tasks(self.root) or [None])[-1]
+        if t and scope.record_writes(t, [rel]):
+            tstate.save(self.root, t)
+        return p
+
     def commit(self, msg="c"):
         subprocess.run(["git", "add", "-A"], cwd=self.root, check=True)
         subprocess.run(["git", "commit", "-q", "-m", msg, "--allow-empty"], cwd=self.root, check=True)

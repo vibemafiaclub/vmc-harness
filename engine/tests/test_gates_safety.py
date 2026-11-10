@@ -28,6 +28,19 @@ class TaskMixin(object):
         self.addCleanup(p.stop)
         return t
 
+    def write(self, rel, text):
+        """작업이 있으면 에이전트 편집으로 — 훅이 남기는 기록(작업 편집·세션 쓰기)을 같이 남긴다."""
+        p = super().write(rel, text)
+        if self.task is not None:
+            from vmc_harness.task import scope
+            scope.record_writes(self.task, [rel])
+            st = state.load(self.root, self.session)
+            w = st.setdefault("writes", [])
+            if rel not in w:
+                w.append(rel)
+            state.save(self.root, self.session, st)
+        return p
+
 
 class TestProtected(TaskMixin, GatesCase):
     def setUp(self):

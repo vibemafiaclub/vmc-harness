@@ -171,6 +171,7 @@ def take(ctx):
         prot, gen, ver = _watch_globs(root)
         lst = _listing(root, prot, gen, ver)
         if lst is None or len(lst) > int(config.get("gates.opaque_watch_max_files", root)):
+            _take_attr_only(ctx)
             return False
         cap = int(config.get("gates.opaque_backup_max_bytes", root))
         files, backup = {}, {}
@@ -188,7 +189,16 @@ def take(ctx):
             "kernel": _kernel_before(ctx)})
         return True
     except Exception:
+        _take_attr_only(ctx)
         return False
+
+
+def _take_attr_only(ctx):
+    """대조는 못 해도 "이 명령이 쓴 파일" 찾기(_attribute)는 하게 실행 시각만 적는다."""
+    try:
+        write_json(_record_file(ctx.root, _key(ctx)), {"at_ns": time.time_ns(), "session_id": ctx.session_id, "attr_only": True})
+    except Exception:
+        pass
 
 
 def _kernel_before(ctx):
@@ -315,6 +325,9 @@ def check(ctx, task):
         f.unlink()
     except OSError:
         pass
+    _attribute(root, ctx, task, rec)
+    if rec.get("attr_only"):
+        return None, [], []
     kern = _kernel_check(rec)
     if kern:
         ctx.state["opaque_gate"] = "engine_write_guard"
@@ -379,6 +392,33 @@ def check(ctx, task):
     ctx.state["opaque_gate"] = gate
     ctx.state["write_paths_after"] = sorted(revert)
     return res, sorted(set(revert) - set(failed)), failed
+
+
+def _attribute(root, ctx, task, rec):
+    """이 명령이 쓴 파일(실행 전 기록 이후 수정된 작업 트리 변경)을 이 작업의 편집으로 남긴다 — 착수 선언이 없으면 세션 기록에.
+    "이번 작업이 바꾼 것"(task.scope.touched)은 기록된 편집만 세므로, 이걸 빼면 스크립트로 쓴 파일이 빠진다."""
+    try:
+        from vmc_harness.task import scope
+        since = int(rec.get("at_ns") or 0)
+        if not since:
+            return
+        rels = scope.written_since(root, since)
+        if not rels:
+            return
+        if task and isinstance(task.get("base"), dict):
+            from vmc_harness.task import state as tstate
+            cur = tstate.by_id(root, task["task_id"]) or task
+            if scope.record_writes(cur, rels):
+                tstate.save(root, cur)
+            scope.record_writes(task, rels)
+        else:
+            from vmc_harness.gates import state
+            st = state.load(root, ctx.session_id)
+            w = st.setdefault("writes", [])
+            w.extend(r for r in rels if r not in w)
+            state.save(root, ctx.session_id, st)
+    except Exception:
+        pass
 
 
 def _after(reason):

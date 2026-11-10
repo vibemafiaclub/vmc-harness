@@ -150,12 +150,40 @@ def changes(root, snap, edits=(), exclude=()):
 
 
 def touched(root, task):
-    """이번 작업이 건드린 파일(루트 상대). 훅이 기록한 편집 ∪ 착수 이후 git 변경 − 다른 진행 중 작업의 편집."""
-    others = set()
-    for t in st.open_tasks(root):
-        if t.get("task_id") != task.get("task_id"):
-            others.update(norm(x) for x in t.get("edits") or [])
-    return changes(root, task.get("base") or {}, edits=task.get("edits") or [], exclude=others)
+    """이번 작업이 건드린 파일(루트 상대) — 착수 이후 바뀐 파일 중 이 작업이 쓴 것(훅이 기록한 편집)만.
+    같은 작업 트리를 여러 세션이 함께 쓰면 git 변경에는 다른 세션·끝난 작업·사람이 쓴 파일과 그들의 커밋이 섞인다.
+    그래서 git 변경만으로는 이 작업 것으로 세지 않는다. 해석 못 한 셸 명령의 쓰기는 실행 뒤 대조가 편집으로 넣는다(record_writes)."""
+    edits = task.get("edits") or []
+    mine = {norm(x) for x in edits}
+    return [f for f in changes(root, task.get("base") or {}, edits=edits) if f in mine]
+
+
+def written_since(root, since_ns, head=None):
+    """since_ns(time.time_ns) 이후 수정된 작업 트리 변경 파일 — 해석 못 한 셸 명령이 쓴 파일 찾기.
+    지워진 파일·하네스 파일·도구 산출물은 뺀다. 그 사이 다른 세션이 쓴 파일이 섞일 수 있다(실행 시간 창 안만)."""
+    out = []
+    for f in gitutil.changed_files(root, head) if head else gitutil.changed_files(root):
+        f = norm(f)
+        if not f or harness_owned(f) or is_artifact(f):
+            continue
+        try:
+            if (Path(root) / f).stat().st_mtime_ns >= since_ns:
+                out.append(f)
+        except OSError:
+            continue
+    return out
+
+
+def record_writes(task, rels):
+    """편집 목록에 경로를 더한다(이미 있으면 그대로). 더한 게 있으면 True. 저장은 호출자가."""
+    edits = task.setdefault("edits", [])
+    added = False
+    for r in rels:
+        r = norm(r)
+        if r and r not in edits:
+            edits.append(r)
+            added = True
+    return added
 
 
 task_changes = touched

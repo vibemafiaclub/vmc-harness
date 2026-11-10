@@ -1,7 +1,7 @@
 """완료 게이트 (spec 02 — Stop, 안전).
 
 이번 작업에서 페이지·API·DB 동작이 바뀌었는데 실제 동작 증거(하네스 마커)가 마지막 편집 이후에 없으면 종료를 막고 빠진 것만 알린다.
-- "이번 작업이 바꾼 것"은 task.scope.changes(착수 스냅샷 — 모든 게이트 공용, 하네스가 쓴 파일·착수 전 변경 제외)
+- "이번 작업이 바꾼 것"은 task.scope.touched(착수 스냅샷 이후 바뀐 파일 중 이 작업이 쓴 것 — 모든 게이트 공용, 하네스가 쓴 파일·착수 전 변경·다른 세션 쓰기 제외)
 - 증거를 무효로 만드는 "마지막 편집"은 동작 파일(page·api·db, 영향 반경이면 그 소스)의 편집만 — 문서·다른 파일 편집은 아니다(현장 결함 C5)
 - 발동 조건: 바뀐 파일 중 동작 파일(page·api·db glob)이 있을 때. 중·대 작업은 영향 반경(impact)이 페이지·API에 닿아도 발동.
   소 작업은 직접 바뀐 동작 파일만 본다(페이지·DB가 안 바뀐 작업엔 발동하지 않음)
@@ -24,12 +24,17 @@ LABEL = {"page": "페이지", "api": "API", "db": "DB"}
 
 
 def changed(root, session_id, task):
-    """이번 작업이 바꾼 파일 — 착수 선언이 있으면 그 스냅샷, 없으면 세션 시작(HEAD·시각) 기준. 원본은 task.scope.changes."""
+    """이번 작업이 바꾼 파일 — 이 작업(선언이 없으면 이 세션)이 쓴 것만. 원본은 task.scope.touched.
+    같은 작업 트리의 다른 세션·사람이 쓴 파일로 막지 않는다(현장 결함 — 동시 세션 오탐)."""
     from vmc_harness.task import scope
     if task and isinstance(task.get("base"), dict):
         return scope.touched(root, task)
     st = state.load(root, session_id)
-    return scope.changes(root, {"head": st.get("base_head"), "since": st.get("session_started_at")})
+    mine = set(st.get("writes") or [])
+    if not mine:
+        return []
+    return [f for f in scope.changes(root, {"head": st.get("base_head"), "since": st.get("session_started_at")},
+                                     edits=sorted(mine)) if f in mine]
 
 
 def _mtime(root, rel):
