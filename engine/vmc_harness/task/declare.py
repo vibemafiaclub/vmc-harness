@@ -201,9 +201,17 @@ def declare(root, raw, session_id=None, agent=None, mode=None):
     if est:
         lines.append(est)
     ctx_parts = []
-    sim = measure.similar_text(measure.similar(root, d))
+    from vmc_harness.core import ledger
+    past = ledger.read_tasks(root)
+    sim = measure.similar_text(measure.similar(root, d, tasks=past))
     if sim:
         ctx_parts.append(sim)
+    try:
+        b = measure.bias_text(root, measure.bias(root, past))
+        if b:
+            ctx_parts.append(b)
+    except Exception:
+        pass
     pm_mode = None
     from vmc_harness.core import budget
     if sz == sizer.MID and changed and (budget.enabled(root, "pm") or budget.enabled(root, "card_search")):
