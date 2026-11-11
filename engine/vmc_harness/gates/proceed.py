@@ -63,6 +63,22 @@ def from_prompt(ctx):
     return grant(ctx.root, ctx.session_id, b, via="prompt")
 
 
+def unblock_hint(ctx, gate):
+    """막은 사유 끝에 붙이는 사람용 한 줄 — 사람이 대화로 풀 수 있는 차단일 때만(에이전트는 그대로 전한다). 아니면 None.
+    PreToolUse·Stop만: 실행 뒤 되돌림(PostToolUse)은 "그냥 진행"이 다음 호출을 통과시키지 못한다."""
+    if ctx.event not in ("PreToolUse", "Stop") or not gate:
+        return None
+    if gate == "meta":
+        if not ctx.state.get("meta_approvable"):
+            return None
+        phrase = config.get("gates.approve_phrases", ctx.root)[0]
+        return "사람에게 이 문장을 그대로 전한다: \"이 설정 변경을 허락하면 대화창에 '%s'이라고만 답해 주세요.\"" % phrase
+    if gate in config.get("gates.proceed_allowed", ctx.root):
+        phrase = config.get("gates.proceed_phrases", ctx.root)[0]
+        return "사람에게 이 문장을 그대로 전한다: \"잘못 막은 것이면 대화창에 '%s'이라고 답해 주세요. 이번 한 번 통과됩니다.\"" % phrase
+    return None
+
+
 def latest_block(root):
     """모든 세션 중 가장 최근 차단 (session_id, block)."""
     d = paths.cache_dir(root) / "gates"

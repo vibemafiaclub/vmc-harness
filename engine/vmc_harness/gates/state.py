@@ -34,6 +34,7 @@ def fingerprint(ctx):
 
 
 def record_block(root, ctx, gate, reason, gate_id=None):
+    ctx.state["recorded_block_gate"] = gate   # 디스패처가 사람에게 전할 풀기 한 줄을 고른다(gates.proceed.unblock_hint)
     st = load(root, ctx.session_id)
     st["blocks"].append({"gate": gate, "gate_id": gate_id, "at": now_iso(), "fingerprint": fingerprint(ctx),
                          "event": ctx.event, "reason": reason, "proceeded": False})

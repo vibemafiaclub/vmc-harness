@@ -119,6 +119,20 @@ def filter_result(ctx, result):
     return result
 
 
+def _with_unblock_hint(ctx, reason):
+    """사람이 대화로 풀 수 있는 차단이면 사유 끝에 사람에게 전할 한 줄(gates.proceed.unblock_hint) — 사람이 탈출구를 모르면
+    헛막기 기록("그냥 진행")이 0이 된다(현장 실측). 붙일 수 없으면 사유 그대로."""
+    try:
+        from vmc_harness.gates import proceed
+        hint = proceed.unblock_hint(ctx, ctx.state.get("recorded_block_gate"))
+        m = _TAG.match(reason or "")
+        if not hint or not m:
+            return reason
+        return inject.message(m.group(1), m.group(2) + "\n" + hint) or reason
+    except Exception:
+        return reason
+
+
 def _log(ctx, kind, **fields):
     try:
         events.log(ctx.root, kind, session_id=ctx.session_id, agent=ctx.agent, **fields)
@@ -210,6 +224,8 @@ def dispatch(event, agent_arg, stdin_text, modules=None, cwd=None):
     except Exception:
         pass
     result, timings = run(ctx, modules)
+    if result.block:
+        result.reason = _with_unblock_hint(ctx, result.reason)
     result = filter_result(ctx, result)
     _verify_timing(ctx, event, result)
     total_ms = (time.time() - t0) * 1000.0
