@@ -52,8 +52,14 @@ def _segments(command):
 
 def _segments_heredoc(command):
     """[(토큰 목록, heredoc 본문)] — `<<TAG`로 연 본문(다음 줄부터 TAG 줄까지)은 명령 줄로 읽지 않고 그 segment에 붙인다."""
+    return [(sg[0], sg[1]) for sg in _segments_full(command)]
+
+
+def _segments_full(command):
+    """[[토큰 목록, heredoc 본문, 앞 구분자 목록, 뒤 구분자]] — 구분자는 cd가 뒤 명령에 미치는지 가르는 데 쓴다(줄바꿈 = "\n")."""
     segs = []
     lines = (command or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    pending = []
     i = 0
     while i < len(lines):
         line = lines[i]
@@ -63,12 +69,17 @@ def _segments_heredoc(command):
         for t in _tokens(line):
             if t in SEPARATORS:
                 if cur:
-                    segs.append([cur, ""])
+                    segs.append([cur, "", pending, t])
+                    pending = []
+                elif segs and segs[-1][3] is None:
+                    segs[-1][3] = t
+                pending.append(t)
                 cur = []
             else:
                 cur.append(t)
         if cur:
-            segs.append([cur, ""])
+            segs.append([cur, "", pending, "\n"])
+            pending = []
         for m in HEREDOC.finditer(line):
             body = []
             while i < len(lines):
@@ -80,7 +91,7 @@ def _segments_heredoc(command):
             owner = next((sg for sg in segs[first:] if "<<" in sg[0]), segs[-1] if len(segs) > first else None)
             if owner is not None:
                 owner[1] += "\n".join(body) + "\n"
-    return [(sg[0], sg[1]) for sg in segs]
+    return segs
 
 
 def _base(tok):
@@ -119,11 +130,45 @@ def _opaque(res, cmd):
         res["opaque_cmds"].append(cmd)
 
 
+CD_CMDS = {"cd", "pushd", "chdir", "set-location", "sl"}
+SUBSHELL_SEPS = {"|", "&", "|&"}
+_UNKNOWN = object()
+
+
+def _cd_target(args):
+    """cd 인자 → 옮겨 갈 폴더 문자열, 알 수 없으면 _UNKNOWN(변수·`cd -`·여러 인자 등)."""
+    na = [a for a in args if a.lower() not in ("/d", "-l", "-p", "-literalpath", "-path", "--")]
+    if not na:
+        return "~"
+    if len(na) > 1 or na[0] == "-" or any(c in na[0] for c in "$`*?"):
+        return _UNKNOWN
+    return na[0]
+
+
+def _join(cd, path):
+    """cd한 폴더 기준 경로. 이미 절대·홈·변수 경로면 그대로."""
+    if cd is None or not path:
+        return path
+    p = path.replace("\\", "/")
+    if p.startswith(("/", "~", "$")) or (len(p) > 1 and p[1] == ":"):
+        return path
+    return cd.rstrip("/\\") + "/" + path
+
+
 def _analyze(command, res, depth):
     if depth > int(config.get("gates.shell_max_nest", profile="standard")):
         _opaque(res, "(nest)")
         return
-    for seg, heredoc in _segments_heredoc(command):
+    # 이 명령 줄의 현재 폴더(None = 훅 cwd). 괄호 subshell 안의 cd는 괄호를 나오면 돌아간다.
+    # cd가 `&&`로 이어질 때만 확실(sure) — `;`·줄바꿈·`||` 뒤는 cd가 실패해도 원래 폴더에서 계속 돌므로 두 경로를 다 대상으로 본다
+    cd, sure, stack, pushed = None, True, [], []
+    for seg, heredoc, before, after in _segments_full(command):
+        for sep in before:
+            if sep == "(":
+                stack.append((cd, sure))
+            elif sep == ")" and stack:
+                cd, sure = stack.pop()
+        nw, nd = len(res["writes"]), len(res["deletes"])
         seg = _redirects(seg, res)
         while seg and ("=" in seg[0] and not seg[0].startswith("-") and seg[0].split("=")[0].replace("_", "").isalnum()):
             seg = seg[1:]
@@ -131,12 +176,37 @@ def _analyze(command, res, depth):
             seg = seg[1:]
             while seg and seg[0].startswith("-"):
                 seg = seg[1:]
-        if not seg:
-            continue
-        cmd = _base(seg[0])
-        args = seg[1:]
-        res["commands"].append(cmd)
-        _command(cmd, args, res, depth, heredoc)
+        if seg:
+            cmd = _base(seg[0])
+            args = seg[1:]
+            res["commands"].append(cmd)
+            piped = after in SUBSHELL_SEPS or any(b in SUBSHELL_SEPS for b in before[-1:])
+            if cmd in CD_CMDS or cmd == "popd":
+                if piped:
+                    pass
+                elif cmd == "popd":
+                    if pushed:
+                        cd, sure = pushed.pop()
+                    else:
+                        cd = None
+                        _opaque(res, "(cd)")
+                else:
+                    t = _cd_target(args)
+                    if cmd == "pushd":
+                        pushed.append((cd, sure))
+                    if t is _UNKNOWN:
+                        cd = None
+                        _opaque(res, "(cd)")   # 어디로 갔는지 모름 — 실행 뒤 대조가 레포 변경을 본다
+                    else:
+                        cd = _join(cd, t)
+                        sure = sure and after == "&&"
+            else:
+                _command(cmd, args, res, depth, heredoc)
+        if cd is not None:
+            for k, n in (("writes", nw), ("deletes", nd)):
+                new = res[k][n:]
+                joined = [_join(cd, x) for x in new]
+                res[k][n:] = joined if sure else joined + [x for x in new if x not in joined]
 
 
 def _redirects(seg, res):
@@ -248,7 +318,8 @@ def _command(cmd, args, res, depth, heredoc=""):
     if cmd in ("sed", "gsed"):
         if any(a == "-i" or a.startswith("-i") or a.startswith("--in-place") or (a.startswith("-") and not a.startswith("--") and "i" in a[1:]) for a in args):
             has_script_flag = any(a in ("-e", "-f", "--expression", "--file") for a in args)
-            files = _nonopt(_skip_valued(args, ("-e", "-f", "--expression", "--file")))
+            # BSD sed `-i ''`(빈 백업 접미사)의 빈 인자는 파일이 아니다
+            files = [a for a in _nonopt(_skip_valued(args, ("-e", "-f", "--expression", "--file"))) if a != ""]
             res["writes"].extend(files if has_script_flag else files[1:])
         return
     if cmd == "dd":

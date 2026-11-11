@@ -34,6 +34,7 @@ def fingerprint(ctx):
 
 
 def record_block(root, ctx, gate, reason, gate_id=None):
+    ctx.state["recorded_block_gate"] = gate   # 디스패처가 사람에게 전할 풀기 한 줄을 고른다(gates.proceed.unblock_hint)
     st = load(root, ctx.session_id)
     st["blocks"].append({"gate": gate, "gate_id": gate_id, "at": now_iso(), "fingerprint": fingerprint(ctx),
                          "event": ctx.event, "reason": reason, "proceeded": False})
@@ -91,6 +92,40 @@ def noticed_once(root, session_id, key):
     st["noticed"].append(key)
     save(root, session_id, st)
     return True
+
+
+def note_writes(root, session_id, rels):
+    """이 세션의 도구 쓰기 시각(파일별, time_ns) — 다른 세션의 긴 셸 명령이 실행 중 바뀐 파일을 제 것으로 세지 않게(opaque_watch._attribute).
+    gates.opaque_stale_min보다 오래된 기록은 버린다(그보다 긴 실행 전 기록은 남지 않는다)."""
+    import time
+    from vmc_harness.core import config
+    rels = [r for r in rels or [] if r]
+    if not rels:
+        return
+    st = load(root, session_id)
+    t = time.time_ns()
+    cut = t - int(float(config.get("gates.opaque_stale_min", root)) * 60 * 1000 * 1000 * 1000)
+    w = {k: v for k, v in (st.get("write_ns") or {}).items() if isinstance(v, int) and v >= cut}
+    for r in rels:
+        w[r] = t
+    st["write_ns"] = w
+    save(root, session_id, st)
+
+
+def written_by_others(root, session_id, rels, since_ns):
+    """rels 중 since_ns 이후 다른 세션이 도구로 쓴 파일."""
+    want = set(rels or [])
+    out = set()
+    d = paths.cache_dir(root) / "gates"
+    if not want or not d.is_dir():
+        return out
+    mine = _file(root, session_id).name
+    for f in d.glob("session-*.json"):
+        if f.name == mine:
+            continue
+        w = (read_json(f, None) or {}).get("write_ns") or {}
+        out |= {r for r in want if isinstance(w.get(r), int) and w[r] >= since_ns}
+    return out
 
 
 def task_key(root, session_id, task_id=None):

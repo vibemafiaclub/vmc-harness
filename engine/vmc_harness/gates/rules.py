@@ -89,8 +89,22 @@ def _db_configured(root):
         return False
 
 
+def _d(x):
+    """dict가 아니면 빈 dict — 손으로 고쳤거나 옛 형식(basis.source가 문자열 등)인 rules.json도 읽는다(현장 결함)."""
+    return x if isinstance(x, dict) else {}
+
+
+def _rules(data):
+    """규칙 항목 중 dict만(문자열 등 다른 모양은 건너뛴다 — 파일에는 그대로 둔다)."""
+    return [r for r in (data.get("rules") or []) if isinstance(r, dict)]
+
+
+def _basis(r):
+    return _d(r.get("basis"))
+
+
 def _from_diagnose(r):
-    return ((r.get("basis") or {}).get("source") or {}).get("via") == "diagnose accept"
+    return _d(_basis(r).get("source")).get("via") == "diagnose accept"
 
 
 def needs_rule_text(r):
@@ -101,22 +115,22 @@ def needs_rule_text(r):
 def render_block(root, data=None):
     data = data or load(root)
     lines = [BEGIN, "## 하네스 규칙 (vmc-harness가 관리 — 이 블록 밖 내용은 그대로)", ""]
-    human = [r for r in data["rules"] if (r.get("basis") or {}).get("type") == "explicit_request" and r.get("enabled", True)
+    human = [r for r in _rules(data) if _basis(r).get("type") == "explicit_request" and r.get("enabled", True)
              and not needs_rule_text(r)]
-    facts_r = [r for r in data["rules"] if (r.get("basis") or {}).get("type") == "machine_fact" and r.get("enabled", True)]
+    facts_r = [r for r in _rules(data) if _basis(r).get("type") == "machine_fact" and r.get("enabled", True)]
     if facts_r:
         lines.append("### 환경 사실")
         for r in facts_r:
             text = (r.get("text") or "{value}").replace("{value}", str(r.get("value", "")))
-            cmd = _cmd_str(r["basis"].get("command") or "")
+            cmd = _cmd_str(_basis(r).get("command") or "")
             lines.append("- %s (읽은 명령: `%s`)" % (text, cmd) if cmd else "- %s" % text)
         lines.append("")
     if human:
         lines.append("### 사람이 정한 규칙 (원문)")
         for r in human:
-            b = r["basis"]
-            src = b.get("source") or {}
-            where = " · ".join(x for x in (src.get("date"), src.get("area"), ("세션 " + src["session"][:8]) if src.get("session") else None) if x)
+            b = _basis(r)
+            src = _d(b.get("source"))
+            where = " · ".join(str(x) for x in (src.get("date"), src.get("area"), ("세션 " + str(src["session"])[:8]) if src.get("session") else None) if x)
             if r.get("rule_text"):
                 lines.append("- %s — 출처: %s" % (r["rule_text"].strip(), " · ".join(x for x in (where, "진단 제안") if x)))
             else:
@@ -218,10 +232,10 @@ def remove_claude_import(text):
 def _notify_hidden(root):
     """rule_text 없는 옛 진단 규칙 — 블록에서 뺐다는 알림을 규칙마다 한 번(brief에 한 줄)."""
     data = load(root)
-    todo = [r for r in data["rules"] if needs_rule_text(r) and r.get("enabled", True) and not r.get("hidden_notified_at")]
+    todo = [r for r in _rules(data) if needs_rule_text(r) and r.get("enabled", True) and not r.get("hidden_notified_at")]
     if not todo:
         return
-    titles = ", ".join("'%s'" % ((r.get("basis") or {}).get("quote") or "")[:40] for r in todo[:3])
+    titles = ", ".join("'%s'" % (_basis(r).get("quote") or "")[:40] for r in todo[:3])
     notify(str(root), "rule_needs_text", "flow",
            "진단 제안으로 넣은 규칙 %d개(%s)는 규칙 문장이 아니라 할 일 제목이라 AGENTS.md 규칙 블록에서 뺐어요. "
            "규칙으로 둘 문장을 AI 대화에서 그대로 말씀해 주시면 그 원문으로 다시 넣어요" % (len(todo), titles),
@@ -307,12 +321,14 @@ def refresh_machine_facts(root, force=False):
     hours = float(config.get("gates.fact_refresh_hours", root))
     checked = read_json(_checked_path(root), {}) or {}
     changed = []
-    for r in data["rules"]:
-        b = r.get("basis") or {}
+    for r in _rules(data):
+        b = _basis(r)
         if b.get("type") != "machine_fact" or not b.get("command") or not r.get("enabled", True):
             continue
         if "value" not in r:
             continue   # 값 칸이 없는 옛 형식(문장에 값이 박힘) — 다시 읽어도 바꿀 자리가 없다
+        if not r.get("id"):
+            continue
         last = parse_iso(checked.get(r["id"]) or r.get("checked_at"))
         if not force and last and (now() - last).total_seconds() < hours * 3600:
             continue
@@ -327,7 +343,7 @@ def refresh_machine_facts(root, force=False):
             changed.append(r["id"])
     write_json(_checked_path(root), checked)
     # 업데이트 뒤 첫 세션: 규칙 문장 없는 옛 진단 규칙을 블록에서 빼고 알린다(한 번 — _notify_hidden이 표시를 남긴다)
-    migrate = any(needs_rule_text(r) and r.get("enabled", True) and not r.get("hidden_notified_at") for r in data["rules"])
+    migrate = any(needs_rule_text(r) and r.get("enabled", True) and not r.get("hidden_notified_at") for r in _rules(data))
     if changed or migrate:
         if changed:
             save(root, data)
