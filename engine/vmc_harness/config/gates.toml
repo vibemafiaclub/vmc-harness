@@ -5,6 +5,7 @@
 completion_max_blocks = 3        # unit=count md=yes spec=02 measured=no — 같은 작업에서 완료 게이트가 종료를 막는 최대 횟수(무한 정지 방지). 넘으면 통과 + 꼭 알릴 일
 proceed_window_min = 30          # unit=min md=no spec=02 measured=no — 차단 뒤 사람이 "그냥 진행"이라 말하면 헛막기로 인정하는 시간
 proceed_phrases = ["그냥 진행", "그냥 해", "무시하고 진행", "막지 말고 진행", "proceed anyway", "just proceed"]  # unit=list md=no spec=00
+approve_phrases = ["승인", "승인합니다", "승인해요", "승인해", "승인해줘", "승인해 주세요", "approve", "approved"]  # unit=list md=no spec=02 — 메타 게이트 차단 뒤(proceed_window_min 안) 사람 입력 전체가 이 문구면(공백·끝 문장부호 무시) 그 차단의 승인 카드를 승인. "승인하지 마"처럼 문구를 품은 다른 말은 아니다
 fact_refresh_hours = 24          # unit=h md=no spec=01 — 기계 사실 규칙의 읽은 명령 재실행 간격(세션 시작 때)
 fact_command_timeout_s = 20      # unit=s md=no spec=01
 cost_ema_alpha = 0.3             # unit=ratio md=no spec=02 — 생성 게이트 실행 시간 이동 평균 가중치

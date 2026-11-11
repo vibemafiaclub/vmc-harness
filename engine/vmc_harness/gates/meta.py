@@ -11,7 +11,7 @@ L1 파일(`.harness/gates/*.json`, `.harness/protected.json`, `.harness/config.j
 import json
 from pathlib import Path
 
-from vmc_harness.core import ledger
+from vmc_harness.core import config, ledger
 from vmc_harness.core.gitutil import git
 from vmc_harness.core.jsonio import read_text_any
 from vmc_harness.gates import globs
@@ -139,8 +139,12 @@ def request_loosen(root, task_id, kind, items, reason):
         detail={"kind": kind, "items": sorted(items)})
 
 
-def judge_file(root, rel, before_text, after_text):
-    """한 L1 파일 변경 판정 → 위반 문장 목록(빈 목록 = 허용)."""
+def _v(text, kind=None, items=None):
+    return {"text": text, "kind": kind, "items": sorted(items or [])}
+
+
+def judge_file_items(root, rel, before_text, after_text):
+    """한 L1 파일 변경 판정 → 위반 목록 [{'text', 'kind', 'items'}]. kind가 있으면 사람 승인(request_loosen 종류)으로 풀린다."""
     rel = globs.norm(rel)
     before, after = _load(before_text), _load(after_text)
     out = []
@@ -148,26 +152,34 @@ def judge_file(root, rel, before_text, after_text):
         gid = Path(rel).stem
         kind, detail = diff_gate(gid, before, after)
         if kind == "loosen" and not _has_loosen_evidence(root, gid, after or before):
-            out.append("게이트 '%s' 풀기(%s) — 헛막기 등 명시적 증거 없음" % (gid, detail))
+            out.append(_v("게이트 '%s' 풀기(%s) — 헛막기 등 명시적 증거 없음" % (gid, detail)))
     elif rel == ".harness/protected.json":
         removed = sorted(_protected_globs(before) - _protected_globs(after))
         if removed and not _human_approved(root, "protected_shrink", removed):
-            out.append("보호 영역 목록 줄이기(%s) — 사람 승인 없음" % ", ".join(removed))
+            out.append(_v("보호 영역 목록 줄이기(%s) — 사람 승인 없음" % ", ".join(removed), "protected_shrink", removed))
     elif rel == ".harness/config.json":
-        bp = (before or {}).get("profile", "standard")
-        ap = (after or {}).get("profile", "standard")
-        if PROFILE_STRICTNESS.get(ap, 1) < PROFILE_STRICTNESS.get(bp, 1) and not _human_approved(root, "profile_loosen", [ap]):
-            out.append("느슨한 프로파일로 변경(%s→%s) — 사람 승인 없음" % (bp, ap))
+        # 비교 기준이 없으면(HEAD에 아직 커밋되지 않은 설치 직후 설정) 지금 프로파일이 init에서 사람이 고른 기준이다 —
+        # 없는 기준을 standard로 채워 solo·prototype 설치를 '느슨하게 바꿈'으로 막던 것(현장 결함: Stop 반복 차단)
+        if before is not None:
+            bp = before.get("profile", "standard")
+            ap = (after or {}).get("profile", "standard")
+            if PROFILE_STRICTNESS.get(ap, 1) < PROFILE_STRICTNESS.get(bp, 1) and not _human_approved(root, "profile_loosen", [ap]):
+                out.append(_v("느슨한 프로파일로 변경(%s→%s) — 사람 승인 없음" % (bp, ap), "profile_loosen", [ap]))
         added = sorted(_prod_allow_items(after) - _prod_allow_items(before))
         if added and not _human_approved(root, "prod_allow", added):
-            out.append("운영 판정 허용 칸 늘리기(%s) — 사람 승인 없음" % ", ".join(added))
+            out.append(_v("운영 판정 허용 칸 늘리기(%s) — 사람 승인 없음" % ", ".join(added), "prod_allow", added))
         if before and after and before.get("project_id") != after.get("project_id"):
-            out.append("project_id 변경")
+            out.append(_v("project_id 변경"))
     return out
 
 
-def judge_worktree(root):
-    """작업 트리의 L1 변경 전체(HEAD 대비) 판정."""
+def judge_file(root, rel, before_text, after_text):
+    """한 L1 파일 변경 판정 → 위반 문장 목록(빈 목록 = 허용)."""
+    return [v["text"] for v in judge_file_items(root, rel, before_text, after_text)]
+
+
+def judge_worktree_items(root):
+    """작업 트리의 L1 변경 전체(HEAD 대비) 판정 → 위반 목록(judge_file_items 형식)."""
     rc, out, _ = git(root, "status", "--porcelain", "--untracked-files=all", "--", ".harness")
     if rc != 0:
         return []
@@ -180,9 +192,74 @@ def judge_worktree(root):
             continue
         p = Path(root) / path
         after = p.read_text(encoding="utf-8") if p.is_file() else None
-        viol.extend(judge_file(root, path, head_text(root, path), after))
+        viol.extend(judge_file_items(root, path, head_text(root, path), after))
     # 지워진 게이트 파일(.json)
     return viol
+
+
+def judge_worktree(root):
+    """작업 트리의 L1 변경 전체(HEAD 대비) 판정."""
+    return [v["text"] for v in judge_worktree_items(root)]
+
+
+# ---- 사람 승인(대화) — 메타 게이트가 막은 '사람 승인 없음' 위반을 승인 카드로 ----
+
+def _open_card(root, kind, items):
+    for a in ledger.list_approvals(root):
+        d = (a or {}).get("detail") or {}
+        if d.get("kind") == kind and not a.get("answer") and set(items) <= set(d.get("items") or []):
+            return a
+    return None
+
+
+def pending_cards(root, task_key, viols):
+    """승인으로 풀 수 있는 위반마다 승인 카드 id(같은 종류·항목의 답 없는 카드가 있으면 그것). 사람이 시킨 작업 키 필수(P4)."""
+    ids = []
+    for v in viols:
+        if not v.get("kind") or not v.get("items"):
+            continue
+        a = _open_card(root, v["kind"], v["items"]) or request_loosen(root, task_key, v["kind"], v["items"], "메타 게이트 차단")
+        if a["approval_id"] not in ids:
+            ids.append(a["approval_id"])
+    return ids
+
+
+def _norm_phrase(s):
+    return "".join(ch for ch in (s or "").lower() if not ch.isspace() and ch not in ".!~,。")
+
+
+def is_approve_phrase(text, root=None):
+    """사람 입력 전체가 승인 문구인가(공백·끝 문장부호 무시). '승인하지 마'처럼 문구를 품은 다른 말은 아니다."""
+    t = _norm_phrase(text)
+    return bool(t) and t in {_norm_phrase(p) for p in config.get("gates.approve_phrases", root)}
+
+
+def approve_from_prompt(ctx):
+    """UserPromptSubmit: 메타 게이트 차단 직후(gates.proceed_window_min 안) 사람이 '승인'이라고만 답하면 그 차단의 승인 카드를 승인.
+    사람 입력 훅에서만 부른다 — 에이전트 셸에서 승인하는 길(vmc-harness approval)은 이 함수와 무관. 승인한 카드 id 목록."""
+    from vmc_harness.gates import state
+    if not is_approve_phrase(ctx.prompt, ctx.root):
+        return []
+    st = state.load(ctx.root, ctx.session_id)
+    pend = st.get("meta_pending") or {}
+    b = state.last_block(ctx.root, ctx.session_id)
+    if not pend.get("approvals") or not b or b.get("gate") != NAME:
+        return []
+    mins = state.minutes_since(pend.get("at"))
+    if mins is None or mins > float(config.get("gates.proceed_window_min", ctx.root)):
+        return []
+    done = []
+    for aid in pend["approvals"]:
+        try:
+            ledger.mark_approval_shown(ctx.root, aid)
+            rec = ledger.answer_approval(ctx.root, aid, "approve")
+        except (KeyError, ledger.MetaGateError):
+            continue
+        if rec.get("answer") == "approve":
+            done.append(aid)
+    st["meta_pending"] = None
+    state.save(ctx.root, ctx.session_id, st)
+    return done
 
 
 def simulate(ctx, rel):
@@ -204,6 +281,11 @@ def simulate(ctx, rel):
 
 
 def check_pre(ctx):
+    """PreToolUse 위반 문장 목록(check_pre_items의 text)."""
+    return [v["text"] for v in check_pre_items(ctx)]
+
+
+def check_pre_items(ctx):
     """PreToolUse: L1 파일을 고치는 호출이면 미리 적용해 판정. 셸·패치로 L1을 고치면 판정할 수 없어 막는다(안전)."""
     l1 = [o for o in (ctx.state.get("file_ops") or []) if o.get("rel") and is_l1(o["rel"])]
     if not l1:
@@ -220,7 +302,7 @@ def check_pre(ctx):
             if after is None:
                 if o["op"] in ("write",) and ctx.tool_name == "apply_patch":
                     continue   # 새 파일 추가(패치) — 조이기
-                viol.append("L1 파일(%s)을 판정할 수 없는 방식으로 수정" % rel)
+                viol.append(_v("L1 파일(%s)을 판정할 수 없는 방식으로 수정" % rel))
                 continue
-        viol.extend(judge_file(ctx.root, rel, before, after))
+        viol.extend(judge_file_items(ctx.root, rel, before, after))
     return viol

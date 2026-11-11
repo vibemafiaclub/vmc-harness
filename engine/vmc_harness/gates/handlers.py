@@ -10,6 +10,8 @@ SessionStart: 세션 기준점(HEAD·시작 시각) 기록
 착수 선언 존재 확인은 task 영역 핸들러가 한다(여기서 하지 않음).
 """
 
+import hashlib
+import json
 import os
 
 from vmc_harness.core import config
@@ -40,6 +42,30 @@ def _blocked(ctx, gate, result, gate_id=None):
     except Exception:
         pass
     return result
+
+
+def _meta_key(viol):
+    body = json.dumps(sorted(v["text"] for v in viol), ensure_ascii=False)
+    return "meta_stop:%s" % hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
+
+
+def _meta_block(ctx, viol):
+    """메타 게이트 차단 + 사람 승인으로 풀 수 있는 위반이면 승인 카드(대화창 알림)와 '승인' 대화 대기 기록."""
+    r = _blocked(ctx, meta.NAME, block("메타 게이트: " + " / ".join(v["text"] for v in viol),
+                                       "메타 게이트: L1 변경이 증거·승인 없이 안전 경계를 넓힘"))
+    try:
+        ids = meta.pending_cards(ctx.root, state.task_key(ctx.root, ctx.session_id, ctx.task_id), viol)
+    except Exception:
+        ids = []
+    if ids:
+        st = state.load(ctx.root, ctx.session_id)
+        st["meta_pending"] = {"at": now_iso(), "approvals": ids}
+        state.save(ctx.root, ctx.session_id, st)
+        ctx.state["meta_approvable"] = True
+        card = _card_notice(ctx.root, ids[0])
+        if card:
+            r.notice = card + "\n또는 대화창에 '%s'이라고만 답하면 승인됩니다" % config.get("gates.approve_phrases", ctx.root)[0]
+    return r
 
 
 DB_TEXT = "db_text"   # 실행하지 않는 문자열에만 접속 흔적 — "그냥 진행" 대상(gates.proceed_allowed)
@@ -120,9 +146,9 @@ def on_pre_tool(ctx):
     r = prod_config.safe_check(ctx)
     if r and not state.consume_bypass(ctx.root, ctx, prod_config.NAME):
         return _blocked(ctx, prod_config.NAME, r)
-    viol = meta.check_pre(ctx)
+    viol = meta.check_pre_items(ctx)
     if viol and not state.consume_bypass(ctx.root, ctx, meta.NAME):
-        return _blocked(ctx, meta.NAME, block("메타 게이트: " + " / ".join(viol), "메타 게이트: L1 변경이 증거·승인 없이 안전 경계를 넓힘"))
+        return _meta_block(ctx, viol)
     if not ctx.write_paths and not (ctx.command and ctx.state.get("shell_opaque")):
         return None
     task = state.current_task(ctx.root, ctx.session_id)
@@ -177,14 +203,20 @@ def on_user_prompt(ctx):
         f = None
     if f:
         ctx.state["proceed_finding"] = f["finding_id"]
+    approved = meta.approve_from_prompt(ctx)
+    if approved:
+        ctx.state["meta_approved"] = approved
+        log_event(ctx.root, "meta_approved", via="prompt", approvals=approved)
     task = state.current_task(ctx.root, ctx.session_id)
     return _declared_card(ctx, task)
 
 
 def on_stop(ctx):
     from vmc_harness.gates import completion   # Stop에서만 — 매 도구 호출 훅이 증거·QA 모듈까지 읽지 않게(E2)
-    viol = meta.judge_worktree(ctx.root)
-    if viol and not state.consume_bypass(ctx.root, ctx, meta.NAME):
-        return _blocked(ctx, meta.NAME, block("메타 게이트: " + " / ".join(viol), "메타 게이트: L1 변경이 증거·승인 없이 안전 경계를 넓힘"))
+    viol = meta.judge_worktree_items(ctx.root)
+    # 이미 작업 트리에 있는 L1 변경은 (세션, 변경)마다 한 번만 종료를 막는다 — 고치는 행위는 PreToolUse가 막고,
+    # 여기서 매번 막으면 파일을 안 고친 세션까지 끝나지 못한다(현장 결함: 두 세션 4분에 40회). 다음부터는 통과(알림은 _blocked가 1회)
+    if viol and not state.consume_bypass(ctx.root, ctx, meta.NAME) and state.noticed_once(ctx.root, ctx.session_id, _meta_key(viol)):
+        return _meta_block(ctx, viol)
     task = state.current_task(ctx.root, ctx.session_id)
     return _blocked(ctx, completion.NAME, completion.check(ctx, task))
