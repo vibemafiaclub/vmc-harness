@@ -310,7 +310,7 @@ TICKET_PROMPT = """목표: {title}
 
 
 def _not_counted(reason):
-    return bool(reason) and any(k in reason for k in ("claude 없음", "login", "auth", "credential", "로그인"))
+    return candidates.not_counted(reason)
 
 
 def _failed(root, cand, reason, tokens):

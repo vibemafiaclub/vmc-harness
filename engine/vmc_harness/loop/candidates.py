@@ -166,6 +166,23 @@ def _run_ast(root, q):
 
 # ---- 받기 ----
 
+# 같은 대상(경로+심볼+종류)이 이 상태로 이미 있으면 새 후보를 만들지 않는다. resolved·expired는 다시 받는다
+# (자연 해소 뒤 다시 생긴 문제, 사람 커밋·제안 만료 뒤 다시 보이는 문제는 새로 볼 일이다)
+DEDUPE_STATUSES = ("open", "proposed", "prepared", "archived", "excluded")
+
+
+def stable_key(anchor, change):
+    """후보의 안정 키 — 모델이 밤마다 요약 문구를 바꿔 내도 같은 대상이면 같다."""
+    a = anchor or {}
+    return (str(a.get("path") or "").replace("\\", "/"), a.get("symbol") or None, change or None)
+
+
+def not_counted(reason):
+    """실행 실패(claude 없음·로그인·worktree)는 후보 탓이 아니라 시도로 세지 않는다 — 티켓·클렌징 공통."""
+    return bool(reason) and (any(k in reason for k in ("claude 없음", "login", "auth", "credential", "로그인"))
+                             or reason.startswith("worktree:"))
+
+
 def target_hash(root, anchor):
     src = detect.symbol_source(root, anchor.get("path"), anchor.get("symbol"))
     return ledger.sha(src) if src is not None else None
@@ -196,10 +213,14 @@ def accept(root, proposal, check_root=None):
         return None, str(e)
     if change in DIRECT and change != "add_pinning_test" and is_write_path(at, rel, anchor["symbol"]):
         change = "write_path"  # 쓰기 경로는 제안만(C)
+    key = stable_key(anchor, change)
     for c in ledger.list_candidates(root):
-        if c.get("kind") == "cleansing" and c.get("status") == "open" and c.get("anchor") == anchor \
-                and c.get("change") == change:
+        if not c or c.get("kind") != "cleansing" or c.get("status") not in DEDUPE_STATUSES \
+                or stable_key(c.get("anchor"), c.get("change")) != key:
+            continue
+        if c.get("status") == "open":
             return ledger.update_candidate(root, c["candidate_id"], count=int(c.get("count") or 1) + 1), None
+        return None, "이미 있는 후보(%s)" % c.get("status")
     rec = ledger.create_candidate(root, "cleansing", proposal["summary"], recheck=proposal["recheck"],
                                   anchor=anchor, target_hash=target_hash(at, anchor))
     from vmc_harness.core.gitutil import head

@@ -22,3 +22,5 @@ power_query_timeout_s = 10     # unit=s md=no spec=06 — powercfg·pmset 조회
 repair_max_attempts = 3        # unit=attempts md=yes spec=06 measured=no 실패 테스트 복구·진단 티켓 — 이만큼(밤마다 1회) 해 보고 안 되면 보관
 proposed_expire_days = 14      # unit=days md=no spec=06 measured=no 제안(proposed)만 하고 아무도 손대지 않은 후보는 이 기간 뒤 만료
 repair_output_tail_lines = 200 # unit=lines md=no spec=06 실패 테스트 복구 때 모델에게 주는 실패 출력 끝부분
+cleanse_same_reason_max = 2    # unit=attempts md=yes spec=06 measured=no 클렌징 후보가 같은 이유로 이만큼 연속 실패·버려지면 보관(archived) — 실행 실패(로그인·claude 없음)는 세지 않는다
+idle_skip_days = 3             # unit=days md=no spec=06 measured=no 사람 활동(지시·세션 시작·세션 기록)이 이보다 오래 없으면 퇴근 판정이 나도 밤 루프를 돌리지 않는다(start-loop는 예외)

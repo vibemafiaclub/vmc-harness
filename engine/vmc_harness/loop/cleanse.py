@@ -101,8 +101,9 @@ def discover(root, wt, deadline=None):
     rep["wander"] = detect.wander(root)  # 세션 기록은 원래 프로젝트 경로 기준
     tmp = local_dir(root) / "loop-detect.json"
     write_json(tmp, rep)
-    existing = ["%s::%s" % ((c.get("anchor") or {}).get("path"), (c.get("anchor") or {}).get("symbol"))
-                for c in candidates.open_candidates(root)]
+    existing = sorted({"%s::%s" % ((c.get("anchor") or {}).get("path"), (c.get("anchor") or {}).get("symbol"))
+                       for c in ledger.list_candidates(root)
+                       if c and c.get("kind") == "cleansing" and c.get("status") in candidates.DEDUPE_STATUSES})
     prompt = DISCOVER_PROMPT.format(detect_path=str(tmp), protected=", ".join(candidates.protected_globs(root)) or "없음",
                                     existing=", ".join(existing) or "없음")
     r = claude(root, prompt, wt, READ_TOOLS, deadline=deadline, add_dirs=[tmp.parent])
@@ -181,7 +182,61 @@ def _propose(root, cand, reason):
 
 
 def process(root, cand, deadline=None):
-    """후보 1건. {"outcome": prepared|proposed|resolved|expired|skipped|discarded|yielded|failed, "reason", "tokens", "action_id"?}"""
+    """후보 1건. {"outcome": prepared|proposed|resolved|expired|skipped|discarded|yielded|failed|archived, "reason", "tokens", "action_id"?}
+    이미 준비한 조치가 머지를 기다리면(브랜치 있음) 다시 만들지 않는다. 같은 이유로 연속 실패하면 보관(archived)."""
+    pending = prepared_pending(root, cand)
+    if pending:
+        return {"outcome": "skipped", "reason": "준비된 조치 머지 대기", "tokens": 0, "action_id": pending["action_id"]}
+    res = _process(root, cand, deadline=deadline)
+    if res.get("outcome") in ("failed", "discarded"):
+        res = _record_failure(root, cand, res)
+    return res
+
+
+def prepared_pending(root, cand):
+    """이 후보로 준비한 조치(정리·안전망)가 아직 prepared이고 브랜치가 살아 있으면 그 조치. 브랜치가 지워졌으면 None(다시 준비)."""
+    for aid in (cand.get("action_id"), cand.get("safety_net_action")):
+        a = ledger.get_action(root, aid) if aid else None
+        if a and a.get("status") == "prepared" and a.get("branch") \
+                and gitops.rev(root, "refs/heads/%s" % a["branch"]):
+            return a
+    return None
+
+
+def _record_failure(root, cand, res):
+    """실패·버림을 후보에 남기고, 끝에서부터 같은 이유가 loop.cleanse_same_reason_max번 이어지면 보관 + 알림.
+    실행 실패(로그인·claude 없음·worktree)는 세지 않는다(티켓과 같다)."""
+    reason = str(res.get("reason") or "")
+    if candidates.not_counted(reason):
+        return res
+    cid = cand["candidate_id"]
+    c = ledger.get_candidate(root, cid) or cand
+    atts = list(c.get("attempts") or [])
+    atts.append({"at": now_iso(), "outcome": res.get("outcome"), "reason": reason[:200],
+                 "tokens": int(res.get("tokens") or 0)})
+    streak = 0
+    for x in reversed(atts):
+        if x.get("reason") != atts[-1]["reason"]:
+            break
+        streak += 1
+    fields = {"attempts": atts, "last_failure": reason[:200]}
+    limit = config.get("loop.cleanse_same_reason_max", root)
+    archived = streak >= limit
+    if archived:
+        fields.update(status="archived", archived_at=now_iso(), resolved_reason="same_failure")
+    ledger.update_candidate(root, cid, **fields)
+    if not archived:
+        return res
+    from vmc_harness.core import notices
+    a = cand.get("anchor") or {}
+    notices.add(root, "cleansing_archived", "flow",
+                "정리 후보 '%s'이(가) 같은 이유로 %d번 연속 안 됨 — 보관, 다시 시도하지 않음(이유: %s)" % (
+                    cand.get("summary"), streak, reason[:80]),
+                area=a.get("path"), refs={"candidate_id": cid, "attempts": len(atts), "reason": reason[:200]})
+    return dict(res, outcome="archived")
+
+
+def _process(root, cand, deadline=None):
     cid = cand["candidate_id"]
     anchor = cand.get("anchor") or {}
     change = cand.get("change") or "internal_cleanup"
