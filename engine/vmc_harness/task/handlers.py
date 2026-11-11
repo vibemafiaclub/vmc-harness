@@ -216,7 +216,7 @@ def on_stop(ctx):
                 overdesign.spawn_llm(root, task["task_id"], ctx.transcript_path, ctx.agent)
                 task = st.by_id(root, task["task_id"]) or task
                 od = task.setdefault("overdesign", od)
-            llm = overdesign.read_llm(root, task["task_id"])
+            llm = overdesign.read_llm(root, task["task_id"], files)
             if llm:
                 signals += llm.get("signals") or []
         if signals and _proceeded(ctx):
