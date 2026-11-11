@@ -97,6 +97,7 @@ class InitLearningBackgroundTest(HarnessTestCase):
         done = events.read(self.root, "learning_done")
         self.assertEqual(len(done), 1)
         self.assertEqual(done[0]["cards"], r["cards"])
+        self.assertEqual(done[0]["tokens"], SESSIONS)  # 가짜 claude가 호출마다 usage 1토큰 — 학습 LLM 호출 합계
         n = [x for x in notices.pending(self.root) if x["kind"] == "learning_done"]
         self.assertEqual(len(n), 1)
         self.assertIn("배운 판단 %d개" % r["cards"], n[0]["text"])
