@@ -104,6 +104,7 @@ def calibration(tasks):
     for metric in ("agent_sec", "tokens"):
         hits = {lv: 0 for lv, _ in LEVELS}
         n = over = 0
+        ratios = []
         for r in tasks:
             act = r.get("actual") or {}
             if not act.get("measured") or act.get(metric) is None:
@@ -117,7 +118,9 @@ def calibration(tasks):
                     hits[lv] += 1
             if float(act[metric]) > float(pred["p80"]):
                 over += 1
-        m = {"n": n, "over_p80": over}
+            if float(pred["p50"]) > 0:
+                ratios.append(float(act[metric]) / float(pred["p50"]))
+        m = {"n": n, "over_p80": over, "ratio_p50_median": round(_median(ratios), 3) if ratios else None}
         for lv, target in LEVELS:
             hit = hits[lv] / float(n) if n else None
             m[lv] = {"hit": round(hit, 3) if hit is not None else None, "target": target,
@@ -125,6 +128,44 @@ def calibration(tasks):
         out[metric] = m
         out["n"] = max(out["n"], n)
     return out
+
+
+def _median(xs):
+    xs = sorted(xs)
+    k = len(xs)
+    return xs[k // 2] if k % 2 else (xs[k // 2 - 1] + xs[k // 2]) / 2.0
+
+
+def bias(root, tasks=None):
+    """이 PC의 최근 실측 작업(task.bias_window건)으로 본 예측 치우침 — calibration()의 실측/P50 중앙값. 표본이 모자라면 None."""
+    from vmc_harness.core.project import pc_id
+    rows = tasks if tasks is not None else ledger.read_tasks(root)
+    me = pc_id()
+    done = [r for r in rows if (r.get("actual") or {}).get("measured") and r.get("pc_id", me) == me]
+    done.sort(key=lambda r: str(r.get("ended_at") or r.get("started_at") or ""))
+    recent = done[-int(config.get("task.bias_window", root)):]
+    cal = calibration(recent)
+    if cal["n"] < int(config.get("task.bias_min_n", root)):
+        return None
+    return cal
+
+
+def bias_text(root, cal):
+    """착수 때 넣는 한 줄: "이 PC 최근 N건: 시간 실측/P50 중앙값 0.28 — 크게 잡는 편 · 토큰 1.36 — 작게 잡는 편"(spec 13 predict)."""
+    if not cal:
+        return None
+    margin = float(config.get("task.bias_margin", root))
+    parts = []
+    for metric, label in (("agent_sec", "시간"), ("tokens", "토큰")):
+        m = cal.get(metric) or {}
+        r = m.get("ratio_p50_median")
+        if r is None:
+            continue
+        lean = "작게 잡는 편" if r >= margin else ("크게 잡는 편" if r <= 1.0 / margin else "대체로 맞음")
+        parts.append("%s %.2f — %s" % (label, r, lean))
+    if not parts:
+        return None
+    return "이 PC 최근 %d건 예측 치우침(실측/P50 중앙값): %s" % (cal["n"], " · ".join(parts))
 
 
 def touch_summary(tasks):

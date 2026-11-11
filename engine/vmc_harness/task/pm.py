@@ -104,7 +104,7 @@ def run_bundle(root, task_id):
     st.add_overhead(root, task_id, tokens=rec["tokens"])
     try:
         events.log(root, "pm", task_id=task_id, opinion=rec["pm"]["opinion"], called=rec["pm"]["called"],
-                   sec=rec["sec"])
+                   sec=rec["sec"], tokens=rec["tokens"])
         if rec["cards"]:
             events.log(root, "card_search", task_id=task_id, cards=[c.get("id") for c in rec["cards"]],
                        phase="declare")

@@ -350,6 +350,98 @@ def _convention_allows(conv_text, kind):
     return any(k in conv_text for k in keys)
 
 
+# ---- 선언 대조(새 파일이 선언된 것인가) ----
+
+# 경로 낱말을 가르는 글자(공백 말고) — 문장으로 쓴 선언에서 경로만 뽑는다
+_TOKEN_SPLIT = re.compile(r"[\s,;()\[\]{}<>\"'`+|]+")
+_EXT_TAIL = re.compile(r"^(.*\.[A-Za-z0-9]+)[^\x00-\x7f]+$")   # "page.md를"·"index.md에" → 조사 떼기
+_HAS_EXT = re.compile(r"\.[A-Za-z0-9]+$")
+_RANGE = re.compile(r"^(.*?)(\d+)~(\d+)(.*)$")                 # "fig1~5.html"
+_BROAD = {"", ".", "*", "**", "**/*", "*/**", "/"}
+
+
+def _nfc(s):
+    import unicodedata
+    return unicodedata.normalize("NFC", s)
+
+
+def _rel_to_root(root, tok):
+    """절대 경로면 프로젝트 루트 상대로(루트 밖이면 None). 상대 경로는 그대로."""
+    import os
+    if not tok.startswith("/") and not re.match(r"^[A-Za-z]:[\\/]", tok):
+        return tok
+    t = tok.replace("\\", "/")
+    for base in {str(root), os.path.realpath(str(root))}:
+        b = base.replace("\\", "/").rstrip("/") + "/"
+        if t.startswith(b):
+            return t[len(b):]
+    return None
+
+
+def path_tokens(root, entry):
+    """선언 항목 하나(경로·glob·문장)에서 경로 낱말만 뽑아 루트 상대로. 경로 모양(/·확장자·glob 글자)이 아닌 낱말은
+    루트에 그 이름의 폴더가 있을 때만 남긴다 — "문서"·"새 페이지" 같은 말이 모든 파일을 선언된 것으로 만들지 않게. "fig1~5.html"은 fig1.html…fig5.html로 푼다."""
+    out = []
+    for raw in _TOKEN_SPLIT.split(_nfc(str(entry or "").replace("\\", "/"))):
+        t = raw.strip().rstrip(".:;!?")
+        m = _EXT_TAIL.match(t)
+        if m:
+            t = m.group(1)
+        t = _rel_to_root(root, t)
+        if t is None:
+            continue
+        is_dir = t.endswith("/")
+        t = scope.norm(t)
+        if t in _BROAD or t.startswith("../"):
+            continue
+        if not ("/" in t or is_dir or _HAS_EXT.search(t) or any(ch in t for ch in "*?")):
+            if not (Path(root) / t).is_dir():
+                continue   # 경로 모양이 아닌 낱말 — 루트에 그 이름의 폴더가 있을 때만 경로로 본다
+            is_dir = True
+        r = _RANGE.match(t)
+        if r and int(r.group(2)) <= int(r.group(3)) \
+                and int(r.group(3)) - int(r.group(2)) < int(config.get("task.declare_range_max", root)):
+            out.extend("%s%d%s" % (r.group(1), i, r.group(4)) for i in range(int(r.group(2)), int(r.group(3)) + 1))
+            continue
+        out.append(t + "/" if is_dir and not any(ch in t for ch in "*?") else t)
+    return out
+
+
+def _token_hit(path, tok):
+    """루트 상대 경로 path가 낱말 tok(루트 상대, 다른 선언 폴더 상대, 파일 이름만)에 들어맞는가."""
+    if tok.endswith("/"):
+        d = tok.rstrip("/")
+        return path.startswith(d + "/") or ("/" + d + "/") in ("/" + path)
+    if any(ch in tok for ch in "*?["):
+        return fnmatch.fnmatch(path, tok) or fnmatch.fnmatch(path, tok + "/*") or fnmatch.fnmatch(path, "*/" + tok)
+    return path == tok or path.startswith(tok + "/") or path.endswith("/" + tok) or ("/" + tok + "/") in ("/" + path)
+
+
+def _scope_hit(path, tok):
+    """선언 범위(scope)의 폴더·glob 아래인가 — 루트 상대로만(파일 이름만 맞추기는 하지 않는다)."""
+    if tok.endswith("/"):
+        return path.startswith(tok)
+    if any(ch in tok for ch in "*?["):
+        return fnmatch.fnmatch(path, tok) or fnmatch.fnmatch(path, tok + "/*")
+    return path == tok or path.startswith(tok + "/")
+
+
+def declared_matcher(root, declare):
+    """path → 선언된 새 것인가. 받는 것: 새로 만들 것(new)의 경로·폴더·glob·문장 속 경로(루트 상대·다른 선언 폴더 상대·파일 이름),
+    건드릴 범위(scope)의 폴더·glob 아래. 레포 전체("."·"**")를 범위로 적은 선언은 새 파일을 선언한 것으로 치지 않는다."""
+    declare = declare or {}
+    new_toks = [t for e in declare.get("new") or [] for t in path_tokens(root, e)]
+    scope_toks = [t for e in declare.get("scope") or [] for t in path_tokens(root, e)]
+    new_raw = {"scope": [x for x in (scope.norm(y) for y in declare.get("new") or []) if x not in _BROAD]}
+
+    def hit(path):
+        p = _nfc(scope.norm(path))
+        if any(_token_hit(p, t) for t in new_toks) or any(_scope_hit(p, t) for t in scope_toks):
+            return True
+        return scope.in_scope(root, new_raw, p)
+    return hit
+
+
 # ---- 기계 신호 ----
 
 def machine_signals(root, task, files=None):
@@ -363,8 +455,7 @@ def machine_signals(root, task, files=None):
         p = PurePosixPath(f)
         base_dirs.update(str(x) for x in p.parents)
     signals = []
-    new_decl = {"scope": declare.get("new") or []}
-    exact_scope = {scope.norm(x) for x in declare.get("scope") or []}
+    declared = declared_matcher(root, declare)
     existing = [f for f in files if (Path(root) / f).is_file()]
     # 새 파일 = 착수 스냅샷 때 없던 파일(HEAD에도, 착수 전 미커밋 변경에도 없음 — scope.existed_at_base와 같은 기준)
     pre = (task.get("base") or {}).get("dirty") or {}
@@ -373,7 +464,7 @@ def machine_signals(root, task, files=None):
     # 새 파일·모듈
     seen_mod = set()
     for f in new_files:
-        if scope.in_scope(root, new_decl, f) or f in exact_scope:
+        if declared(f):
             continue
         signals.append({"kind": "new_file_out_of_scope", "path": f})
         d = str(PurePosixPath(f).parent)
@@ -383,7 +474,7 @@ def machine_signals(root, task, files=None):
                 if str(parent) in (".", "") or str(parent) in base_dirs:
                     break
                 top = str(parent)
-            if top not in seen_mod and not scope.in_scope(root, new_decl, top + "/x"):
+            if top not in seen_mod and not declared(top + "/x"):
                 seen_mod.add(top)
                 signals.append({"kind": "new_module_out_of_scope", "path": top})
 
@@ -600,8 +691,9 @@ def run_llm(root, task_id, transcript_path=None, agent=None):
                     diff += "\n+++ %s (새 파일)\n%s" % (f, body)
     diff = diff[:max_diff]
     prompts = _prompts_text(transcript_path, agent, max_prompt) or (task.get("declare") or {}).get("intent", "")
-    rec = {"status": "done", "signals": [], "tokens": 0}
+    rec = {"status": "done", "signals": [], "tokens": 0, "files": files}
     if diff.strip():
+        res = None
         try:
             from vmc_harness.core.llm import claude_p
             from vmc_harness.task.pm import parse_json_obj
@@ -616,14 +708,41 @@ def run_llm(root, task_id, transcript_path=None, agent=None):
                 if isinstance(s, dict) and s.get("what"):
                     rec["signals"].append({"kind": "unrequested_option", "path": s.get("path"),
                                            "name": str(s["what"])[:120]})
+            rec["signals"] = own_signals(rec["signals"], files)
+        try:
+            from vmc_harness.core import events
+            events.log(root, "overdesign_llm", task_id=task_id, called=bool(res), tokens=int(rec["tokens"] or 0),
+                       sec=round(float((res or {}).get("sec") or 0), 2), signals=len(rec["signals"]))
+        except Exception:
+            pass
     write_json(od_path(root, task_id), rec)
     st.add_overhead(root, task_id, tokens=rec["tokens"])
     return rec
 
 
-def read_llm(root, task_id):
+def own_signals(signals, files):
+    """이 작업이 쓴 파일(task.scope.touched)에 대한 신호만. LLM이 지시문에서 본 남의 파일, 결과가 늦게 읽히는 동안
+    바뀐 귀속(다른 세션이 쓴 파일이 그때는 섞여 있던 것)으로 막지 않는다. 경로가 없는 신호는 남긴다."""
+    mine = {_nfc(scope.norm(f)) for f in files or []}
+    out = []
+    for s in signals or []:
+        p = s.get("path")
+        if p:
+            p = _nfc(scope.norm(p))
+            if p not in mine and not any(f.endswith("/" + p) for f in mine):
+                continue
+        out.append(s)
+    return out
+
+
+def read_llm(root, task_id, files=None):
+    """LLM 판정 결과. files(지금 이 작업이 쓴 파일)를 주면 그 파일에 대한 신호만 남긴다."""
     rec = read_json(od_path(root, task_id))
-    return rec if rec and rec.get("status") == "done" else None
+    if not rec or rec.get("status") != "done":
+        return None
+    if files is not None:
+        rec = dict(rec, signals=own_signals(rec.get("signals"), files))
+    return rec
 
 
 def describe(signals):
