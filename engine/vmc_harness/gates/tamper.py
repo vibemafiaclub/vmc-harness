@@ -102,21 +102,27 @@ def is_test_file(root, rel):
     return bool(globs.match_any(rel, tg)) and not globs.match_any(rel, eg)
 
 
+def _lf(text):
+    return text.replace("\r\n", "\n") if isinstance(text, str) else text
+
+
 def _edits_apply(ctx, cur):
-    """Edit·MultiEdit의 old_string이 차례로 다 찾아지는가 — 못 찾으면 미리 적용한 결과를 믿을 수 없다(판정 불가)."""
-    if ctx.tool_name == "Write":
-        return True
-    if cur is None:
-        return False
+    """Edit·MultiEdit를 미리 적용한 내용. old_string이 차례로 다 찾아지지 않으면 None(판정 불가).
+    줄끝은 LF로 맞춰 비교한다 — Windows 작업 트리(CRLF)에 에이전트가 LF로 old_string을 보내도 찾게(도구도 그렇게 맞춘다)."""
     ti = ctx.tool_input or {}
+    if ctx.tool_name == "Write":
+        return _lf(ti.get("content"))
+    if cur is None:
+        return None
+    cur = _lf(cur)
     edits = [ti] if ctx.tool_name == "Edit" else list(ti.get("edits") or [])
     for e in edits:
-        old = e.get("old_string") or ""
+        old = _lf(e.get("old_string") or "")
         if not old or old not in cur:
-            return False
-        new = e.get("new_string", "")
+            return None
+        new = _lf(e.get("new_string", ""))
         cur = cur.replace(old, new) if e.get("replace_all") else cur.replace(old, new, 1)
-    return bool(edits)
+    return cur if edits else None
 
 
 def _call_additive(ctx, op):
@@ -125,11 +131,11 @@ def _call_additive(ctx, op):
         return False
     root, rel = ctx.root, op["rel"]
     if ctx.tool_name in ("Edit", "MultiEdit", "Write"):
-        from vmc_harness.gates import meta
         before = read_text_any(Path(root) / rel)
-        if not _edits_apply(ctx, before):
+        after = _edits_apply(ctx, before)
+        if before is None or after is None:
             return False
-        return additive_ok(before, meta.simulate(ctx, rel), root)
+        return additive_ok(_lf(before), after, root)
     if ctx.tool_name == "apply_patch":
         ti = ctx.tool_input or {}
         body = ti.get("command") or ti.get("patch") or ti.get("input") or ""

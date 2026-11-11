@@ -77,3 +77,13 @@ class TestTamperAdditive(TaskMixin, GatesCase):
         self.commit("snap")
         out = self.hook("PreToolUse", "Write", {"file_path": str(self.root / "tests/__snapshots__/calc.snap"), "content": "a\nb\n"})
         self.assertDenied(out)
+
+
+class TestTamperAdditiveCRLF(TestTamperAdditive):
+    """Windows 작업 트리(CRLF)에 LF로 된 old_string을 보내도 더하기 판정이 같아야 한다(CI windows 실패 재현)."""
+
+    def setUp(self):
+        super().setUp()
+        for rel, body in (("tests/test_calc.py", PY), ("web/calc.spec.ts", JS)):
+            (self.root / rel).write_bytes(body.replace("\n", "\r\n").encode("utf-8"))
+        self.commit("crlf")
