@@ -241,7 +241,7 @@ def learning_job(root):
         return st
     st.update(status="done", result=res, updated_at=now_iso(), ended_at=now_iso())
     write_json(p, st)
-    events.log(root, "learning_done", **{k: res.get(k) for k in ("sessions", "learnings", "cards", "rejected", "failed", "sec")})
+    events.log(root, "learning_done", **{k: res.get(k) for k in ("sessions", "learnings", "cards", "rejected", "failed", "tokens", "sec")})
     text = "지난 세션 %d개를 읽고 배운 판단 %d개를 카드로 만들었어요(후보 %d건 — 같은 정정이 한 번 더 나오면 카드가 돼요)." % (
         res["sessions"], res["cards"], res["learnings"])
     if res["failed"]:
@@ -263,7 +263,7 @@ def run_learning(root, sessions, out=print, use_llm=True, progress=None):
     from vmc_harness.core import ledger
     from vmc_harness.core.mask import mask
     t0 = time.time()
-    res = {"status": "ok", "sessions": 0, "learnings": 0, "cards": 0, "rejected": 0, "failed": 0}
+    res = {"status": "ok", "sessions": 0, "learnings": 0, "cards": 0, "rejected": 0, "failed": 0, "tokens": 0}
     main = [s for s in sessions if s.get("kind") == "main" and len(s.get("human_prompts") or []) >= 2]
     for i, s in enumerate(main, 1):
         if i == 1 or i % 20 == 0:
@@ -271,9 +271,10 @@ def run_learning(root, sessions, out=print, use_llm=True, progress=None):
         prompts = [mask(p.get("text") or "")[:config.get("selfcheck.prompt_chars", root)]
                    for p in s["human_prompts"]][-config.get("selfcheck.max_prompts", root):]
         try:
-            data, _ = selfcheck.extract(root, prompts)
+            data, call = selfcheck.extract(root, prompts)
         except Exception:
-            data = None
+            data, call = None, None
+        res["tokens"] += int((call or {}).get("tokens") or 0)  # 실패한 호출도 쓴 토큰은 센다
         if data is None:
             res["failed"] += 1
         else:

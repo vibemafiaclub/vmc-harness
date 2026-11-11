@@ -168,6 +168,31 @@ def is_idle(root, t=None):
     return (t - last).total_seconds() >= config.get("loop.idle_hours", root) * 3600
 
 
+def last_human_at(root):
+    """사람이 마지막으로 이 프로젝트에서 AI에게 일을 시킨 시각(datetime | None).
+    activity.json(UserPromptSubmit·세션 시작 훅)과 부트스트랩·재진단이 쓴 세션 색인(사람 프롬프트·main 세션 시작) 중 늦은 것.
+    health.json activity_last는 하네스 자신의 이벤트도 섞여 사람 신호로 쓰지 않는다."""
+    def _t(v):
+        return parse_iso(v) if isinstance(v, str) else None
+    data = load(root)
+    times = [_t(data.get(k)) for k in ("last_prompt_at", "last_session_start_at")]
+    from vmc_harness.core.jsonio import read_jsonl
+    for r in read_jsonl(local_dir(root) / "sessions-index.jsonl"):
+        if not isinstance(r, dict) or r.get("kind") != "main":
+            continue
+        times.append(_t(r.get("started_at")))
+        times.extend(_t(x.get("at")) for x in r.get("human_prompts") or [] if isinstance(x, dict))
+    times = [t if t.tzinfo else t.astimezone() for t in times if t]
+    return max(times) if times else None
+
+
+def recently_used(root, t=None):
+    """사람 활동이 loop.idle_skip_days 안에 있었나. 한 번도 없으면 False — 아무도 안 쓰는 프로젝트에 밤 토큰을 쓰지 않는다."""
+    t = t or now()
+    last = last_human_at(root)
+    return last is not None and (t - last).total_seconds() < config.get("loop.idle_skip_days", root) * 86400
+
+
 def night_key(root, t=None):
     """밤 묶음 키(YYYY-MM-DD, 밤이 시작된 날). stop_hour 전 새벽은 전날 밤."""
     t = t or now()

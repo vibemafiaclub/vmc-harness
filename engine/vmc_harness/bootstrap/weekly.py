@@ -112,6 +112,30 @@ def refresh_baselines(root, sessions, info=None, run_tests=True):
     return out
 
 
+def changes_since(root, sessions, since):
+    """지난 진단(generated_at) 뒤로 새로 생긴 입력 — {"sessions": 사람이 연 main 세션 수, "tasks": 장부 작업 수}.
+    지난 진단 시각을 모르면 큰 값(다시 진단)."""
+    t0 = parse_iso(since) if isinstance(since, str) else None
+    if t0 is None:
+        return {"sessions": float("inf"), "tasks": float("inf")}
+    if t0.tzinfo is None:
+        t0 = t0.astimezone()
+
+    def after(v):
+        t = parse_iso(v) if isinstance(v, str) else None
+        if t is None:
+            return False
+        return (t if t.tzinfo else t.astimezone()) > t0
+    n_sess = sum(1 for x in sessions or [] if x.get("kind") == "main" and after(x.get("started_at")))
+    try:
+        from vmc_harness.core import ledger
+        tasks = ledger.read_tasks(root, include_open=True)
+    except Exception:
+        tasks = []
+    n_tasks = sum(1 for r in tasks if after(r.get("started_at") or r.get("ended_at")))
+    return {"sessions": n_sess, "tasks": n_tasks}
+
+
 def job(root, ref=None, pdf=True):
     """백그라운드 본체: 세션 다시 읽기 → 진단(실측 포함) → 리포트 HTML+PDF → 알림 한 줄."""
     from vmc_harness.bootstrap import diagnose, report, sessions_input
@@ -124,6 +148,15 @@ def job(root, ref=None, pdf=True):
         sessions, info = sessions_input.load(root, None)
         if not info.get("main"):
             sessions = None  # 이 PC에 세션이 없으면(다른 PC 묶음으로 진단한 프로젝트) 지난 색인 그대로
+        chg = changes_since(root, sessions, (diagnose.load(root) or {}).get("generated_at"))
+        if chg["sessions"] < config.get("diagnose.weekly_min_new_sessions", root) \
+                and chg["tasks"] < config.get("diagnose.weekly_min_new_tasks", root):
+            # 지난 리포트 뒤로 입력이 거의 그대로 — 같은 진단을 다시 사지 않는다. 다음 기간에 쌓인 만큼 다시 본다
+            st.update(status="skipped_no_change", ended_at=now_iso(), new_sessions=chg["sessions"], new_tasks=chg["tasks"])
+            write_json(state_path(root), st)
+            events.log(root, "diagnose_weekly", status="skipped_no_change", new_sessions=chg["sessions"],
+                       new_tasks=chg["tasks"], tokens=0)
+            return st
         st["baselines"] = refresh_baselines(root, sessions, info)
         d = diagnose.run(root, sessions=sessions, trigger="weekly")
         rep = report.build(root, open_browser=False) if pdf else {"html": None, "pdf": None}

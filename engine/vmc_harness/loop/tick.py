@@ -59,6 +59,12 @@ def tick(root):
         return {"ran": False, "reason": "not_idle"}
     if _done_tonight(root):
         return {"ran": False, "reason": "done_tonight"}
+    if trigger == "idle" and not activity.recently_used(root):
+        # 아무도 쓰지 않는 프로젝트 — 퇴근 판정만으로 밤마다 돌지 않는다(start-loop는 사람이 시킨 것이라 예외). 밤당 한 줄만 남긴다
+        if not any(r.get("event") == "skip" for r in night_records(root)):
+            last = activity.last_human_at(root)
+            log(root, "skip", reason="no_recent_human", last_human_at=last.isoformat(timespec="seconds") if last else None)
+        return {"ran": False, "reason": "no_recent_human"}
     return run(root, trigger)
 
 

@@ -264,7 +264,10 @@ class WeeklyTest(HarnessTestCase):
                 mock.patch.object(diagnose, "render_proposal", return_value={}), \
                 mock.patch.object(report, "to_pdf", return_value=(None, "x")), \
                 mock.patch.object(sessions_input, "load", return_value=([], {"main": 0})):
-            st = weekly.job(self.root)
+            ledger.append_task(self.root, {"task_id": "T-w1", "started_at": now().isoformat()})
+            with mock.patch.object(config, "get", side_effect=lambda k, r=None, profile=None:
+                                   1 if k == "diagnose.weekly_min_new_tasks" else config.defaults()[0][k]):
+                st = weekly.job(self.root)  # 지난 진단 뒤 새 작업 1건 ≥ 상한 1 → 다시 만든다
         self.assertEqual(st["status"], "ok")
         self.assertTrue(st["html"].replace("\\", "/").split("/.harness/cache/reports/")[1].startswith("diagnosis-"))
         ns = [n for n in notices.pending(self.root) if n["kind"] == "diagnosis_weekly"]
