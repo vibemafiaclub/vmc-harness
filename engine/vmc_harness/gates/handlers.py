@@ -185,6 +185,8 @@ def after_opaque(ctx, task=None):
 
 def on_post_tool(ctx):
     task = state.current_task(ctx.root, ctx.session_id)
+    if ctx.write_paths:
+        state.note_writes(ctx.root, ctx.session_id, ctx.write_paths)
     r = after_opaque(ctx, task)
     if r:
         return r

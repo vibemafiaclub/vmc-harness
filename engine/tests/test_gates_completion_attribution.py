@@ -72,3 +72,30 @@ class MonorepoBehaviorGlobsTest(OpaqueCase):
         g = facts.detect_behavior_globs(self.root, ["apps", "projects"], [], None)
         self.assertIn("apps/web/app/**", g["page"])
         self.assertIn("apps/web/app/api/**", g["api"])
+
+
+class ConcurrentAttributionTest(OpaqueCase):
+    """긴 셸 명령이 도는 동안 다른 세션이 도구로 쓴 파일은 그 명령(이 작업)의 편집으로 세지 않는다."""
+
+    def setUp(self):
+        super().setUp()
+        self.write("web/pages/a.tsx", "export const A = 1\n")
+        self.write("web/pages/b.tsx", "export const B = 1\n")
+        self.commit("pages")
+        st.session_touch(self.root, self.session, "claude")
+
+    def test_other_session_tool_write_during_command_excluded(self):
+        dec.declare(self.root, _raw(["web/pages/"]), session_id=self.session)
+        me = self.session
+
+        def during():
+            self.write("web/pages/a.tsx", "export const A = 9\n")              # 이 명령
+            self.session = "sess-other"
+            path = str(self.root / "web/pages/b.tsx")
+            self.hook("PreToolUse", "Edit", {"file_path": path, "old_string": "1", "new_string": "2"})
+            self.write("web/pages/b.tsx", "export const B = 2\n")              # 다른 세션의 Edit
+            self.hook("PostToolUse", "Edit", {"file_path": path, "old_string": "1", "new_string": "2"})
+            self.session = me
+
+        self.run_cmd(SCRIPT, during)
+        self.assertEqual(scope.touched(self.root, st.current(self.root, me)), ["web/pages/a.tsx"])

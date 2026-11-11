@@ -422,6 +422,7 @@ def _additive_after(root, rec, rel):
 
 def _attribute(root, ctx, task, rec):
     """이 명령이 쓴 파일(실행 전 기록 이후 수정된 작업 트리 변경)을 이 작업의 편집으로 남긴다 — 착수 선언이 없으면 세션 기록에.
+    그 사이 다른 세션이 도구로 쓴 파일(state.written_by_others)은 뺀다.
     "이번 작업이 바꾼 것"(task.scope.touched)은 기록된 편집만 세므로, 이걸 빼면 스크립트로 쓴 파일이 빠진다."""
     try:
         from vmc_harness.task import scope
@@ -429,6 +430,11 @@ def _attribute(root, ctx, task, rec):
         if not since:
             return
         rels = scope.written_since(root, since)
+        if rels:
+            # 실행 시간 창 안에 다른 세션이 도구(Edit·Write·해석한 셸 쓰기)로 쓴 파일은 그 세션 것이다(동시 세션 오귀속)
+            from vmc_harness.gates import state
+            others = state.written_by_others(root, ctx.session_id, rels, since)
+            rels = [r for r in rels if r not in others]
         if not rels:
             return
         if task and isinstance(task.get("base"), dict):
