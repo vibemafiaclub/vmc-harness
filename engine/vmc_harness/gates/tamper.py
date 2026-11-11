@@ -102,6 +102,23 @@ def is_test_file(root, rel):
     return bool(globs.match_any(rel, tg)) and not globs.match_any(rel, eg)
 
 
+def _edits_apply(ctx, cur):
+    """Edit·MultiEdit의 old_string이 차례로 다 찾아지는가 — 못 찾으면 미리 적용한 결과를 믿을 수 없다(판정 불가)."""
+    if ctx.tool_name == "Write":
+        return True
+    if cur is None:
+        return False
+    ti = ctx.tool_input or {}
+    edits = [ti] if ctx.tool_name == "Edit" else list(ti.get("edits") or [])
+    for e in edits:
+        old = e.get("old_string") or ""
+        if not old or old not in cur:
+            return False
+        new = e.get("new_string", "")
+        cur = cur.replace(old, new) if e.get("replace_all") else cur.replace(old, new, 1)
+    return bool(edits)
+
+
 def _call_additive(ctx, op):
     """이번 도구 호출이 그 기존 테스트 파일에 더하기만 하는가(미리 적용·패치 판독). 판정할 수 없으면 False."""
     if op.get("op") not in ("edit", "write") or not is_test_file(ctx.root, op["rel"]):
@@ -109,7 +126,10 @@ def _call_additive(ctx, op):
     root, rel = ctx.root, op["rel"]
     if ctx.tool_name in ("Edit", "MultiEdit", "Write"):
         from vmc_harness.gates import meta
-        return additive_ok(read_text_any(Path(root) / rel), meta.simulate(ctx, rel), root)
+        before = read_text_any(Path(root) / rel)
+        if not _edits_apply(ctx, before):
+            return False
+        return additive_ok(before, meta.simulate(ctx, rel), root)
     if ctx.tool_name == "apply_patch":
         ti = ctx.tool_input or {}
         body = ti.get("command") or ti.get("patch") or ti.get("input") or ""
