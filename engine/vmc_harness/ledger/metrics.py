@@ -4,7 +4,7 @@
 집계에는 숫자·id만 넣는다(원문 없음, P9). 판정(judge)은 여기서 `exposures`만 읽는다.
 
 읽는 이벤트 kind(다른 영역이 core.events.log로 남기는 것):
-- gate_fire / gate_block / proceed_anyway(헛막기) / gate_time(sec)   — 필드 gate_id
+- gate_fire / gate_block / proceed_anyway(헛막기) / block_disputed(에이전트 반박 — 참고 지표) / gate_time(sec)   — 필드 gate_id
 - exposure                                                            — 필드 action_ids, card(카드별 반환 수), gate_id
 - card_search                                                         — 필드 sec, tokens(오버헤드만)
 - session_selfcheck                                                   — 필드 human_turns, tool_calls, corrections, measured
@@ -21,7 +21,7 @@ from vmc_harness.core.clock import now, now_iso, parse_iso
 from vmc_harness.core.jsonio import read_json, read_jsonl, write_json
 from vmc_harness.core.project import local_dir, pc_id
 
-GATE_KINDS = {"gate_fire": "fired", "gate_block": "blocked", "proceed_anyway": "false_block"}
+GATE_KINDS = {"gate_fire": "fired", "gate_block": "blocked", "proceed_anyway": "false_block", "block_disputed": "disputed"}
 
 
 def _date_of(at):
@@ -42,7 +42,7 @@ def _empty(date_str, pc):
 
 
 def _gate(m, gid):
-    return m["gates"].setdefault(gid, {"fired": 0, "blocked": 0, "false_block": 0, "sec": 0.0})
+    return m["gates"].setdefault(gid, {"fired": 0, "blocked": 0, "false_block": 0, "disputed": 0, "sec": 0.0})
 
 
 def _num(v, default=0):
@@ -172,7 +172,7 @@ def card_uses(root, card_id, since=None, rows=None):
 
 def gate_totals(root, gate_id, since=None, rows=None):
     rows = load_all(root, since) if rows is None else rows
-    t = {"fired": 0, "blocked": 0, "false_block": 0, "sec": 0.0}
+    t = {"fired": 0, "blocked": 0, "false_block": 0, "disputed": 0, "sec": 0.0}
     for m in rows:
         if since and (m.get("date") or "") < since:
             continue
@@ -195,7 +195,7 @@ def team(root, since=None):
         t["overhead"]["sec"] = round(t["overhead"]["sec"] + _num((m.get("overhead") or {}).get("sec")), 3)
         t["overhead"]["tokens"] += int(_num((m.get("overhead") or {}).get("tokens")))
         for gid, g in (m.get("gates") or {}).items():
-            tg = t["gates"].setdefault(gid, {"fired": 0, "blocked": 0, "false_block": 0, "sec": 0.0})
+            tg = t["gates"].setdefault(gid, {"fired": 0, "blocked": 0, "false_block": 0, "disputed": 0, "sec": 0.0})
             for k in tg:
                 tg[k] += g.get(k, 0)
         for cid, n in (m.get("cards") or {}).items():

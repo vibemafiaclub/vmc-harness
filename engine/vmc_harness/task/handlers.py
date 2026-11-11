@@ -22,6 +22,9 @@ from vmc_harness.task import state as st
 WRITE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch", "str_replace_editor",
                "create_file", "edit_file")
 NO_DECLARE = "착수 선언 없음"
+# 빠진 것과 그걸 채우는 도구·항목(01 P6 — 절차가 아니라 빠진 것과 도구). 실측: 차단 뒤 에이전트가 매번 --help로 한 번 더 왕복(2026-11-11)
+# 예측 항목 이름은 싣지 않는다 — 작업 중 주입에 예측·토큰 낱말 금지(01 P5, 빠지면 declare가 빠진 항목을 알려 준다)
+NO_DECLARE_DETAIL = "%s — 도구 `vmc-harness declare`, 필요한 항목: 하려는 것(--intent)·건드릴 범위(--scope)·예측" % NO_DECLARE
 OVERDESIGN_GATE = "overdesign"
 
 
@@ -134,7 +137,7 @@ def on_pre_tool(ctx):
             events.log(root, "gate_block", gate_id="kernel.declare", tool=ctx.tool_name)
         except Exception:
             pass
-        return HookResult(block=True, reason=inject.message("gate_violation", NO_DECLARE))
+        return HookResult(block=True, reason=inject.message("gate_violation", NO_DECLARE_DETAIL))
     from vmc_harness.task import scope
     injects = []
     stamp = now_iso()

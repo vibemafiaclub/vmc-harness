@@ -62,6 +62,15 @@ def grant_bypass(root, session_id, block):
     save(root, session_id, st)
 
 
+def mark_disputed(root, session_id, block, reason):
+    """에이전트 반박 표시(gates.proceed.dispute) — 통과 허가는 주지 않는다."""
+    st = load(root, session_id)
+    for b in st["blocks"]:
+        if b["at"] == block["at"] and b["fingerprint"] == block["fingerprint"]:
+            b["disputed"] = reason
+    save(root, session_id, st)
+
+
 def consume_bypass(root, ctx, gate, gate_id=None):
     """1회 통과 허가가 있으면 소비하고 True. 완료 게이트는 지문 대신 이벤트(Stop)로 맞춘다."""
     st = load(root, ctx.session_id)

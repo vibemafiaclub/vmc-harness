@@ -52,7 +52,9 @@ class HandlersTest(HarnessTestCase):
     def test_block_without_declare(self):
         r = self._edit("src/list.py")
         self.assertTrue(r.block)
-        self.assertEqual(r.reason, "[vmc-harness:gate_violation] 착수 선언 없음")
+        self.assertTrue(r.reason.startswith("[vmc-harness:gate_violation] 착수 선언 없음"))
+        self.assertIn("--intent", r.reason)
+        self.assertIn("--scope", r.reason)
         # 읽기 도구는 막지 않는다
         self.assertIsNone(handlers.on_pre_tool(ctx(self.root, "PreToolUse", tool_name="Read")))
         # 프로젝트 밖 경로만 쓰는 도구는 선언 대상 아님

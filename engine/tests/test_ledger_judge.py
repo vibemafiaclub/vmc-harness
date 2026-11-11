@@ -113,7 +113,7 @@ class JudgeTest(HarnessTestCase):
         events.log(self.root, "exposure", action_ids=[], card="K-1")
         metrics.rollup(self.root)
         t = metrics.team(self.root)
-        self.assertEqual(t["gates"]["g9"], {"fired": 1, "blocked": 1, "false_block": 1, "sec": 1.5})
+        self.assertEqual(t["gates"]["g9"], {"fired": 1, "blocked": 1, "false_block": 1, "disputed": 0, "sec": 1.5})
         self.assertEqual(t["cards"]["K-1"], 1)
         self.assertEqual(t["reference"]["corrections_per_100_tool_calls"], 5.0)
         self.assertEqual(t["reference"]["human_turns_per_session"], 4.0)
