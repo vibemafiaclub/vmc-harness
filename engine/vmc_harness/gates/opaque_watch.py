@@ -360,7 +360,7 @@ def check(ctx, task):
     if ver:   # 검증물 변조(현장 결함 C3·C4와 같은 부류 — 문자열 짐작 대신 실행 뒤 대조). 새 파일 추가는 막지 않는다
         from vmc_harness.gates import tamper
         existed = tamper._existing(root, ctx, task)
-        hit = [r for r in ver if existed(r)]
+        hit = [r for r in ver if existed(r) and not (ch[r]["kind"] == "modify" and _additive_after(root, rec, r))]
         bad = [r for r in hit if not tamper._declared(task, r)]
         if hit and not bad:
             from vmc_harness.gates.common import log_event
@@ -392,6 +392,32 @@ def check(ctx, task):
     ctx.state["opaque_gate"] = gate
     ctx.state["write_paths_after"] = sorted(revert)
     return res, sorted(set(revert) - set(failed)), failed
+
+
+def _before_text(root, rec, rel):
+    """실행 전 내용 — 사본, 없으면(변경 없던 추적 파일) git index. 못 구하면 None."""
+    b = rec["backup"].get(rel)
+    if b is not None:
+        data = base64.b64decode(b)
+    elif (rec["files"].get(rel) or {}).get("status") == "clean":
+        rc, data = git_bytes(root, "cat-file", "blob", ":" + rel)
+        if rc != 0:
+            return None
+    else:
+        return None
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return None
+
+
+def _additive_after(root, rec, rel):
+    """검증물 변조 — 기존 줄을 모두 남기고 더하기만 했고(건너뛰기 표시 없이) 되돌릴 필요가 없는가."""
+    from vmc_harness.core.jsonio import read_text_any
+    from vmc_harness.gates import tamper
+    if not tamper.is_test_file(root, rel):
+        return False
+    return tamper.additive_ok(_before_text(root, rec, rel), read_text_any(Path(root) / rel), root)
 
 
 def _attribute(root, ctx, task, rec):
