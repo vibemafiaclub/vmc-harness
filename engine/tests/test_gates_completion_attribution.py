@@ -4,6 +4,7 @@
 상관없는 세션의 종료가 막혔다. 해석 못 한 셸 명령(스크립트)이 쓴 파일은 실행 뒤 대조가 이 작업의 편집으로 넣는다.
 """
 
+import time
 from vmc_harness.gates import completion
 from vmc_harness.task import declare as dec, scope, state as st
 
@@ -99,3 +100,37 @@ class ConcurrentAttributionTest(OpaqueCase):
 
         self.run_cmd(SCRIPT, during)
         self.assertEqual(scope.touched(self.root, st.current(self.root, me)), ["web/pages/a.tsx"])
+
+
+class SameContentRewriteTest(OpaqueCase):
+    """셸 명령이 이미 바뀌어 있던 파일을 같은 내용으로 다시 쓰면(git --autostash 등) 그 명령의 편집으로 세지 않는다."""
+
+    def setUp(self):
+        super().setUp()
+        self.write("web/pages/a.tsx", "export const A = 1\n")
+        self.write("web/pages/b.tsx", "export const B = 1\n")
+        self.commit("pages")
+        st.session_touch(self.root, self.session, "claude")
+
+    def test_autostash_rewrite_of_other_dirty_file_excluded(self):
+        dec.declare(self.root, _raw(["web/pages/"]), session_id=self.session)
+        self.write("web/pages/b.tsx", "export const B = 2\n")      # 착수 뒤 다른 쪽(훅 없음)이 바꿔 둔 미커밋 파일
+        time.sleep(0.01)
+
+        def during():
+            self.write("web/pages/a.tsx", "export const A = 9\n")  # 이 명령
+            self.write("web/pages/b.tsx", "export const B = 2\n")  # autostash가 같은 내용으로 다시 씀(수정 시각만 바뀜)
+
+        self.run_cmd(SCRIPT, during)
+        self.assertEqual(scope.touched(self.root, st.current(self.root, self.session)), ["web/pages/a.tsx"])
+
+    def test_changed_content_of_dirty_file_still_counted(self):
+        dec.declare(self.root, _raw(["web/pages/"]), session_id=self.session)
+        self.write("web/pages/b.tsx", "export const B = 2\n")
+        time.sleep(0.01)
+
+        def during():
+            self.write("web/pages/b.tsx", "export const B = 3\n")  # 이 명령이 내용을 바꿈
+
+        self.run_cmd(SCRIPT, during)
+        self.assertEqual(scope.touched(self.root, st.current(self.root, self.session)), ["web/pages/b.tsx"])

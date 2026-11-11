@@ -21,7 +21,9 @@ import time
 from pathlib import Path
 
 from vmc_harness.core import config, paths
+from vmc_harness.core import gitutil
 from vmc_harness.core.gitutil import git, git_bytes
+from vmc_harness.core.proc import run as _run
 from vmc_harness.core.jsonio import engine_writes_log, read_json, write_json
 from vmc_harness.gates import globs
 
@@ -186,7 +188,7 @@ def take(ctx):
         write_json(_record_file(root, _key(ctx)), {
             "at_ns": time.time_ns(), "session_id": ctx.session_id, "command": (ctx.command or "")[:500],
             "protected_globs": prot, "generated_globs": gen, "verification_globs": ver, "files": files, "backup": backup,
-            "kernel": _kernel_before(ctx)})
+            "kernel": _kernel_before(ctx), "dirty": _dirty_hashes(root)})
         return True
     except Exception:
         _take_attr_only(ctx)
@@ -196,9 +198,45 @@ def take(ctx):
 def _take_attr_only(ctx):
     """대조는 못 해도 "이 명령이 쓴 파일" 찾기(_attribute)는 하게 실행 시각만 적는다."""
     try:
-        write_json(_record_file(ctx.root, _key(ctx)), {"at_ns": time.time_ns(), "session_id": ctx.session_id, "attr_only": True})
+        write_json(_record_file(ctx.root, _key(ctx)), {"at_ns": time.time_ns(), "session_id": ctx.session_id, "attr_only": True,
+                                                    "dirty": _dirty_hashes(ctx.root)})
     except Exception:
         pass
+
+
+def _hashes(root, rels):
+    """{경로: git blob 해시} — 없는 파일은 빠진다. 한 번의 git 호출로."""
+    rels = [r for r in rels if (Path(root) / r).is_file()]
+    if not rels:
+        return {}
+    rc, out, _ = _run(gitutil.GIT_BASE + ["hash-object", "--stdin-paths"], cwd=str(root), timeout=config.get("gates.opaque_git_timeout_s", root),
+                      input_text="\n".join(rels) + "\n")
+    hs = out.split() if rc == 0 else []
+    return dict(zip(rels, hs)) if len(hs) == len(rels) else {}
+
+
+def _dirty_hashes(root):
+    """실행 전 이미 바뀌어 있던 추적 파일의 내용 해시 — 실행 뒤 귀속에서 내용은 그대로이고 수정 시각만 바뀐 파일
+    (git stash·--autostash·checkout이 같은 내용으로 다시 쓴 것)을 빼려고. 미추적 파일은 autostash가 건드리지 않아 보지 않는다.
+    큰 파일(`gates.opaque_backup_max_bytes` 초과)·상한 초과는 적지 않는다 — 빼기 없이 옛 동작. 비용: 미커밋 22개 레포에서 실측 약 0.04초."""
+    try:
+        rc, out, _ = git(root, "diff", "--name-only", "--no-renames", "-z", "HEAD")
+        if rc != 0:
+            return {}
+        rels = gitutil.split_z(out)
+        if len(rels) > int(config.get("gates.opaque_watch_max_files", root)):
+            return {}
+        cap = int(config.get("gates.opaque_backup_max_bytes", root))
+        small = []
+        for r in rels:
+            try:
+                if (Path(root) / r).stat().st_size <= cap:
+                    small.append(r)
+            except OSError:
+                continue
+        return _hashes(root, small)
+    except Exception:
+        return {}
 
 
 def _kernel_before(ctx):
@@ -435,6 +473,11 @@ def _attribute(root, ctx, task, rec):
             from vmc_harness.gates import state
             others = state.written_by_others(root, ctx.session_id, rels, since)
             rels = [r for r in rels if r not in others]
+        before = rec.get("dirty") or {}
+        if rels and before:
+            # 실행 전과 내용이 같은 파일은 이 명령이 쓴 게 아니다(--autostash가 미커밋 파일을 같은 내용으로 다시 써 수정 시각만 바뀜)
+            now_h = _hashes(root, [r for r in rels if r in before])
+            rels = [r for r in rels if not (r in now_h and now_h[r] == before[r])]
         if not rels:
             return
         if task and isinstance(task.get("base"), dict):
