@@ -8,7 +8,8 @@
 - single_impl_abstraction 구현 하나뿐인 새 추상화(Protocol·ABC·interface) — bootstrap facts `conventions`의 기존 관례 예외
 - near_duplicate_function 기존 함수와 거의 같은 새 함수(정규화 AST 해시·유사도, Python)
 LLM 신호(중·대만, 새 컨텍스트, 목표만):
-- unrequested_option      요청에 없는 옵션·설정·기능
+- unrequested_option      요청에 없는 옵션·설정·기능 — 이번 작업 지시(착수 직전 사람 메시지부터)와 착수 선언 대비.
+                          기존 관례를 따른 새 파일(같은 폴더·같은 이름 끝이 이미 여럿)은 신호에서 뺀다
 
 신호가 잡히면 축소 검토 1회만(handlers.on_stop). 메시지는 무엇이 잡혔는지만(01 P6).
 """
@@ -46,8 +47,10 @@ LABEL = {
 }
 
 OD_SYSTEM = (
-    "목표: 사람의 요청 대비 과한 것을 찾아라 — 요청에 없는 옵션·설정·기능·확장 지점.\n"
-    "참고: 사람이 쓴 지시문, 이번 작업의 diff.\n"
+    "목표: 이번 작업의 요청 대비 과한 것을 찾아라 — 요청에 없는 옵션·설정·기능·확장 지점.\n"
+    "참고: [이번 작업을 시작한 사람 지시]와 [작업 중 사람 지시]가 요청이다. [이전 대화]는 맥락일 뿐 이번 작업의 요청이 아니다. "
+    "[착수 선언]은 작업 시작 때 사람에게 보인 범위다 — 짧은 지시(링크만·'ㄱㄱ' 등)를 해석할 때 쓰고, 사람 지시와 어긋나면 사람 지시가 우선이다. "
+    "그리고 이번 작업의 diff.\n"
     "제약: 요청을 이루는 데 필요한 것은 과한 것이 아니다. 확신이 없으면 넣지 않는다.\n"
     '출력 형식: JSON 한 줄만. {"signals":[{"what":"<무엇이 과한지 한 구절>","path":"<파일>"}]} 없으면 {"signals":[]}'
 )
@@ -658,7 +661,24 @@ def spawn_llm(root, task_id, transcript_path=None, agent=None):
         return "sync"
 
 
-def _prompts_text(transcript_path, agent, max_chars):
+def _split_prompts(prompts, since):
+    """사람 메시지를 이번 작업 기준으로 나눈다 — (이전 대화, 이번 작업을 시작한 지시, 작업 중 지시).
+    이번 작업을 시작한 지시 = 착수(since) 직전 마지막 사람 메시지. since가 없거나 못 읽으면 마지막 메시지."""
+    from vmc_harness.core.clock import parse_iso
+    texts = [(parse_iso(p.get("at")), p.get("text") or "") for p in prompts or []]
+    if not texts:
+        return [], "", []
+    t0 = parse_iso(since) if since else None
+    idx = len(texts) - 1
+    if t0 is not None:
+        before = [i for i, (t, _) in enumerate(texts) if t is not None and t <= t0]
+        idx = before[-1] if before else 0
+    return [x for _, x in texts[:idx]], texts[idx][1], [x for _, x in texts[idx + 1:]]
+
+
+def _prompts_text(transcript_path, agent, max_chars, since=None, prior_max_chars=0):
+    """판정에 넣을 사람 지시문. 세션 전체를 한 덩어리로 주면 앞선 다른 요청("브리핑해줘")을 이번 작업의 요청으로
+    읽는다(2026-11-14 현장 — 회의록 적재를 브리핑 요청 대비 과하다고 막음). 이번 작업 지시와 이전 대화를 나눠 표시한다."""
     if not transcript_path:
         return ""
     try:
@@ -666,8 +686,59 @@ def _prompts_text(transcript_path, agent, max_chars):
         s = sessions.parse(transcript_path, agent)
     except Exception:
         return ""
-    text = "\n---\n".join(p.get("text") or "" for p in s.human_prompts)
-    return text[-max_chars:]
+    prior, start, during = _split_prompts(s.human_prompts, since)
+    if not start and not during:
+        return ""
+    out = "[이번 작업을 시작한 사람 지시]\n" + start
+    if during:
+        out += "\n\n[작업 중 사람 지시]\n" + "\n---\n".join(during)
+    out = out[-max_chars:]
+    if prior and prior_max_chars:
+        out = "[이전 대화 — 맥락만, 이번 작업의 요청 아님]\n" + "\n---\n".join(prior)[-prior_max_chars:] + "\n\n" + out
+    return out
+
+
+def _declare_text(task):
+    d = task.get("declare") or {}
+    intent = (d.get("intent") or "").strip()
+    if not intent:
+        return ""
+    end = (d.get("end") or "").strip()
+    return "[착수 선언]\n" + intent + (" (" + end + ")" if end else "")
+
+
+def _convention_tail(name):
+    """'261114_홍길동_인터뷰_transcript.md' → '_transcript.md'. 이름에 구분자(_ -)가 없으면 None."""
+    stem, dot, ext = name.rpartition(".")
+    if not dot:
+        stem, ext = name, ""
+    m = re.search(r"[_\-][^_\-]+$", stem)
+    if not m:
+        return None
+    return m.group(0)[1:] + (("." + ext) if ext else "")
+
+
+def convention_files(root, task, files):
+    """기존 관례를 따른 새 파일 — 같은 폴더에 이름 끝(마지막 _/- 뒤 + 확장자)이 같은 파일이 착수 시점에
+    task.overdesign_convention_min개 이상 있었다. 반복 산출물(회의록·전사 등)을 '요청에 없는 것'으로 막지 않는다."""
+    base = (task.get("base") or {}).get("head")
+    existed = {_nfc(e) for e in _base_files(root, base)}
+    need = config.get("task.overdesign_convention_min", root)
+    out = set()
+    for f in files or []:
+        f = _nfc(scope.norm(f))
+        if f in existed:
+            continue
+        p = PurePosixPath(f)
+        tail = _convention_tail(p.name)
+        if not tail:
+            continue
+        parent = str(p.parent)
+        peers = [e for e in existed if str(PurePosixPath(e).parent) == parent
+                 and (e.endswith("_" + tail) or e.endswith("-" + tail))]
+        if len(peers) >= need:
+            out.add(f)
+    return out
 
 
 def run_llm(root, task_id, transcript_path=None, agent=None):
@@ -690,7 +761,10 @@ def run_llm(root, task_id, transcript_path=None, agent=None):
                 if body is not None:
                     diff += "\n+++ %s (새 파일)\n%s" % (f, body)
     diff = diff[:max_diff]
-    prompts = _prompts_text(transcript_path, agent, max_prompt) or (task.get("declare") or {}).get("intent", "")
+    prompts = _prompts_text(transcript_path, agent, max_prompt, since=task.get("started_at"),
+                            prior_max_chars=config.get("task.overdesign_prior_prompt_max_chars", root))
+    declared = _declare_text(task)
+    prompts = "\n\n".join(x for x in (declared, prompts) if x)
     rec = {"status": "done", "signals": [], "tokens": 0, "files": files}
     if diff.strip():
         res = None
@@ -709,6 +783,9 @@ def run_llm(root, task_id, transcript_path=None, agent=None):
                     rec["signals"].append({"kind": "unrequested_option", "path": s.get("path"),
                                            "name": str(s["what"])[:120]})
             rec["signals"] = own_signals(rec["signals"], files)
+            conv = convention_files(root, task, files)
+            rec["signals"] = [x for x in rec["signals"] if not x.get("path") or _nfc(scope.norm(x["path"])) not in conv]
+            rec["convention"] = sorted(conv)
         try:
             from vmc_harness.core import events
             events.log(root, "overdesign_llm", task_id=task_id, called=bool(res), tokens=int(rec["tokens"] or 0),

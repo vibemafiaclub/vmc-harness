@@ -16,7 +16,9 @@ session_keep_days = 90           # unit=days md=no spec=09 — 로컬 세션 상
 pm_sync_agents = []              # unit=agents md=no spec=03 — PM·카드 검색을 동기로 돌릴 에이전트(Codex 훅 비동기 불가가 확인되면 "codex", 12 #3)
 overdesign_llm_timeout_s = 60    # unit=s md=yes spec=03 measured=no
 overdesign_diff_max_chars = 20000  # unit=chars md=yes spec=03 measured=no — LLM 판정에 넣는 diff 상한
-overdesign_prompt_max_chars = 4000 # unit=chars md=yes spec=03 measured=no — LLM 판정에 넣는 사람 지시문 상한
+overdesign_prompt_max_chars = 4000 # unit=chars md=yes spec=03 measured=no — LLM 판정에 넣는 사람 지시문 상한(이번 작업 지시)
+overdesign_prior_prompt_max_chars = 800 # unit=chars md=yes spec=03 measured=no — 이번 작업 전 대화를 맥락으로 넣는 상한
+overdesign_convention_min = 2    # unit=files md=no spec=03 measured=no — 같은 폴더·같은 이름 끝 파일이 이만큼 있으면 새 파일을 기존 관례로 보고 LLM 신호에서 뺀다
 dup_similarity = 0.92            # unit=ratio md=no spec=03 measured=no — 정규화 AST 토큰 유사도(이상이면 거의 같은 함수)
 dup_min_nodes = 25               # unit=nodes md=no spec=03 measured=no — 이보다 작은 함수는 유사도 비교 안 함(작은 함수는 우연히 닮는다)
 dup_scan_max_files = 3000        # unit=files md=no spec=03 measured=no — 기존 함수 비교 대상 파일 상한(편의 장치 비용 상한)

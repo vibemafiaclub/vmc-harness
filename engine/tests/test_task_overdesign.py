@@ -118,3 +118,50 @@ class OverdesignTest(HarnessTestCase):
         self.assertTrue(scope.in_scope(self.root, d, "lib/new_mod/a.py"))
         self.assertFalse(scope.in_scope(self.root, d, "srcx/a.py"))
         self.assertFalse(scope.in_scope(self.root, d, "app/other.py"))
+
+
+class OverdesignPromptTest(HarnessTestCase):
+    """LLM 판정 입력 — 이번 작업 지시만 요청으로, 착수 선언 포함, 기존 관례 새 파일 제외 (2026-11-14 현장)."""
+
+    def test_split_prompts_by_task_start(self):
+        ps = [{"at": "2026-11-14T20:00:00+09:00", "text": "A님 브리핑해줘"},
+              {"at": "2026-11-14T20:40:00+09:00", "text": "미팅 링크 첨부"},
+              {"at": "2026-11-14T20:50:00+09:00", "text": "ㄱㄱ"}]
+        prior, start, during = overdesign._split_prompts(ps, "2026-11-14T20:42:00+09:00")
+        self.assertEqual(prior, ["A님 브리핑해줘"])
+        self.assertEqual(start, "미팅 링크 첨부")
+        self.assertEqual(during, ["ㄱㄱ"])
+        prior, start, during = overdesign._split_prompts(ps, None)
+        self.assertEqual((len(prior), start, during), (2, "ㄱㄱ", []))
+        self.assertEqual(overdesign._split_prompts([], "2026-11-14T20:42:00+09:00"), ([], "", []))
+
+    def test_prompts_text_labels(self):
+        fake = types.SimpleNamespace(human_prompts=[
+            {"at": "2026-11-14T20:00:00+09:00", "text": "브리핑해줘"},
+            {"at": "2026-11-14T20:40:00+09:00", "text": "미팅 링크"}])
+        with mock.patch("vmc_harness.sessions.parse", return_value=fake):
+            out = overdesign._prompts_text("x.jsonl", "claude", 4000, since="2026-11-14T20:42:00+09:00",
+                                           prior_max_chars=800)
+        self.assertTrue(out.startswith("[이전 대화"))
+        self.assertIn("[이번 작업을 시작한 사람 지시]\n미팅 링크", out)
+        self.assertLess(out.index("브리핑해줘"), out.index("[이번 작업을 시작한 사람 지시]"))
+
+    def test_declare_text(self):
+        self.assertEqual(overdesign._declare_text({"declare": {"intent": "회의록 적재", "end": "커밋까지"}}),
+                         "[착수 선언]\n회의록 적재 (커밋까지)")
+        self.assertEqual(overdesign._declare_text({}), "")
+
+    def test_convention_files(self):
+        for n in ("261112_가_인터뷰.md", "261112_가_인터뷰_transcript.md",
+                  "261113_나_인터뷰.md", "261113_나_인터뷰_transcript.md"):
+            self.write("logs/" + n, "x\n")
+        self.write("logs/README.md", "x\n")
+        self.commit()
+        st.session_touch(self.root, "S1", "claude")
+        with mock.patch("vmc_harness.task.pm.start", return_value="sync"):
+            task = dec.declare(self.root, {"intent": "회의록", "scope": ["logs/"],
+                                           "predict": {"tokens": [1, 2, 3], "agent_sec": [60, 120, 170]}})["task"]
+        files = ["logs/261114_다_인터뷰.md", "logs/261114_다_인터뷰_transcript.md", "logs/new_plan.md",
+                 "logs/README.md"]
+        conv = overdesign.convention_files(self.root, task, files)
+        self.assertEqual(conv, {"logs/261114_다_인터뷰.md", "logs/261114_다_인터뷰_transcript.md"})
