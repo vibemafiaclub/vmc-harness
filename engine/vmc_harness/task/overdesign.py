@@ -48,10 +48,12 @@ LABEL = {
 
 OD_SYSTEM = (
     "목표: 이번 작업의 요청 대비 과한 것을 찾아라 — 요청에 없는 옵션·설정·기능·확장 지점.\n"
-    "참고: [이번 작업을 시작한 사람 지시]와 [작업 중 사람 지시]가 요청이다. [이전 대화]는 맥락일 뿐 이번 작업의 요청이 아니다. "
+    "참고: [이번 작업을 시작한 사람 지시]와 [작업 중 사람 지시]가 요청이다. 사람 지시가 짧은 승인('ㄱㄱ' 등)이면 "
+    "[사람이 승인한 계획 — 직전 어시스턴트 제안]도 요청이다(그 계획에 적힌 단계는 과한 것이 아니다). [이전 대화]는 맥락일 뿐 이번 작업의 요청이 아니다. "
     "[착수 선언]은 작업 시작 때 사람에게 보인 범위다 — 짧은 지시(링크만·'ㄱㄱ' 등)를 해석할 때 쓰고, 사람 지시와 어긋나면 사람 지시가 우선이다. "
     "그리고 이번 작업의 diff.\n"
-    "제약: 요청을 이루는 데 필요한 것은 과한 것이 아니다. 확신이 없으면 넣지 않는다.\n"
+    "제약: 요청을 이루는 데 필요한 것은 과한 것이 아니다. 요청을 하다 생긴 결함을 바로잡은 것과 범위 안 파일의 기존 값 조정"
+    "(스타일 수치·간격·줄바꿈 등)은 옵션·기능이 아니다 — 신호는 새 옵션·플래그·설정·분기·기능만. 확신이 없으면 넣지 않는다.\n"
     '출력 형식: JSON 한 줄만. {"signals":[{"what":"<무엇이 과한지 한 구절>","path":"<파일>"}]} 없으면 {"signals":[]}'
 )
 
@@ -676,7 +678,27 @@ def _split_prompts(prompts, since):
     return [x for _, x in texts[:idx]], texts[idx][1], [x for _, x in texts[idx + 1:]]
 
 
-def _prompts_text(transcript_path, agent, max_chars, since=None, prior_max_chars=0):
+def _approved_plan(session, start_text, since, max_chars, short_max_chars):
+    """이번 작업을 시작한 사람 지시가 짧은 승인("ㄱㄱ" 등)이면, 그 지시 바로 앞 사람 메시지 이후의 어시스턴트 글(직전 제안).
+    계획은 어시스턴트가 적고 사람은 "ㄱㄱ"만 하는 흐름에서 요청 내용을 잃어 계획대로 한 일을 '요청 밖'으로 막았다(2026-11-15 현장)."""
+    from vmc_harness.core.clock import parse_iso
+    if not max_chars or len((start_text or "").strip()) > short_max_chars:
+        return ""
+    texts = getattr(session, "assistant_texts", None) or []
+    prompts = [(parse_iso(p.get("at")), p.get("text") or "") for p in session.human_prompts or []]
+    t0 = parse_iso(since) if since else None
+    starts = [t for t, x in prompts if t is not None and x == start_text and (t0 is None or t <= t0)]
+    if not starts:
+        return ""
+    t_start = starts[-1]
+    before = [t for t, _ in prompts if t is not None and t < t_start]
+    t_prev = before[-1] if before else None
+    plan = [x.get("text") or "" for x in texts
+            if (lambda t: t is not None and t < t_start and (t_prev is None or t > t_prev))(parse_iso(x.get("at")))]
+    return "\n".join(plan)[-max_chars:]
+
+
+def _prompts_text(transcript_path, agent, max_chars, since=None, prior_max_chars=0, plan_max_chars=0, short_max_chars=0):
     """판정에 넣을 사람 지시문. 세션 전체를 한 덩어리로 주면 앞선 다른 요청("브리핑해줘")을 이번 작업의 요청으로
     읽는다(2026-11-14 현장 — 회의록 적재를 브리핑 요청 대비 과하다고 막음). 이번 작업 지시와 이전 대화를 나눠 표시한다."""
     if not transcript_path:
@@ -693,6 +715,9 @@ def _prompts_text(transcript_path, agent, max_chars, since=None, prior_max_chars
     if during:
         out += "\n\n[작업 중 사람 지시]\n" + "\n---\n".join(during)
     out = out[-max_chars:]
+    plan = _approved_plan(s, start, since, plan_max_chars, short_max_chars)
+    if plan:  # 상한은 따로(overdesign_plan_max_chars) — 사람 지시 상한에 잘려 나가지 않게
+        out = "[사람이 승인한 계획 — 직전 어시스턴트 제안]\n" + plan + "\n\n" + out
     if prior and prior_max_chars:
         out = "[이전 대화 — 맥락만, 이번 작업의 요청 아님]\n" + "\n---\n".join(prior)[-prior_max_chars:] + "\n\n" + out
     return out
@@ -762,7 +787,9 @@ def run_llm(root, task_id, transcript_path=None, agent=None):
                     diff += "\n+++ %s (새 파일)\n%s" % (f, body)
     diff = diff[:max_diff]
     prompts = _prompts_text(transcript_path, agent, max_prompt, since=task.get("started_at"),
-                            prior_max_chars=config.get("task.overdesign_prior_prompt_max_chars", root))
+                            prior_max_chars=config.get("task.overdesign_prior_prompt_max_chars", root),
+                            plan_max_chars=config.get("task.overdesign_plan_max_chars", root),
+                            short_max_chars=config.get("task.overdesign_short_ack_max_chars", root))
     declared = _declare_text(task)
     prompts = "\n\n".join(x for x in (declared, prompts) if x)
     rec = {"status": "done", "signals": [], "tokens": 0, "files": files}
@@ -783,6 +810,8 @@ def run_llm(root, task_id, transcript_path=None, agent=None):
                     rec["signals"].append({"kind": "unrequested_option", "path": s.get("path"),
                                            "name": str(s["what"])[:120]})
             rec["signals"] = own_signals(rec["signals"], files)
+            rec["signals"], used = existing_usage(root, rec["signals"], files)
+            rec["existing_usage"] = [x.get("name") for x in used]
             conv = convention_files(root, task, files)
             rec["signals"] = [x for x in rec["signals"] if not x.get("path") or _nfc(scope.norm(x["path"])) not in conv]
             rec["convention"] = sorted(conv)
@@ -795,6 +824,43 @@ def run_llm(root, task_id, transcript_path=None, agent=None):
     write_json(od_path(root, task_id), rec)
     st.add_overhead(root, task_id, tokens=rec["tokens"])
     return rec
+
+
+UNUSED_CLAIM = re.compile(r"쓰이지 않|안 쓰이|사용되지 않|사용하지 않|의미 없는|불필요한|unused", re.I)
+IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_-]{2,}")
+
+
+def _codeish(tok):
+    """코드 식별자로 보이는 낱말(cs-top·is_hero·isHero) — 'div'·'flag' 같은 일반 낱말은 사용처를 따질 대상이 아니다."""
+    return "-" in tok or "_" in tok or any(c.isupper() for c in tok[1:]) or any(c.isdigit() for c in tok)
+
+
+def _used_outside(root, name, exclude):
+    """이름이 이 작업이 쓴 파일(exclude) 밖, 저장소의 다른 파일에 단어로 나오는가."""
+    rc, out, _ = gitutil.git(root, "grep", "-l", "-w", "-I", "--untracked", "-F", "-e", name)
+    if rc not in (0, 1):
+        return False
+    for f in out.splitlines():
+        f = _nfc(f.strip())
+        if f and f not in exclude and not f.startswith(scope.HARNESS_PREFIX):
+            return True
+    return False
+
+
+def existing_usage(root, signals, files):
+    """'쓰이지 않는 장치'라고 지목한 신호인데, 지목한 이름이 모두 저장소의 다른 파일에서 이미 쓰이면 기존 관례다 — 신호에서 뺀다.
+    LLM은 diff만 보므로 같은 레포의 사용처(CSS 선택자·프레임워크가 읽는 플래그 등)를 모르고 '안 쓰인다'고 한다(2026-11-15 현장).
+    돌려주는 값: (남길 신호, 뺀 신호)."""
+    mine = {_nfc(scope.norm(f)) for f in files or []}
+    keep, dropped = [], []
+    for sgl in signals or []:
+        what = str(sgl.get("name") or "")
+        names = sorted({m.group(0) for m in IDENT.finditer(what) if _codeish(m.group(0))}) if UNUSED_CLAIM.search(what) else []
+        if names and all(_used_outside(root, n, mine) for n in names):
+            dropped.append(sgl)
+        else:
+            keep.append(sgl)
+    return keep, dropped
 
 
 def own_signals(signals, files):

@@ -32,6 +32,7 @@ class Session:
     started_at: Optional[str] = None
     ended_at: Optional[str] = None
     human_prompts: List[Dict[str, Any]] = field(default_factory=list)   # [{"at","text"}]
+    assistant_texts: List[Dict[str, Any]] = field(default_factory=list)   # [{"at","text"}] 어시스턴트 글(도구 호출 제외) — 과설계 판정이 "ㄱㄱ"로 승인된 직전 제안을 읽는다(task/overdesign.py)
     tool_calls: List[Dict[str, Any]] = field(default_factory=list)      # [{"at","name","input","paths"}]
     tokens: int = 0
     token_parts: Dict[str, int] = field(default_factory=dict)   # input·output·cache_read·cache_creation

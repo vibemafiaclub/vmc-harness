@@ -129,7 +129,7 @@ def parse(path, windows=None):
     s = Session(session_id=None, agent="claude")
     if not records:
         return s
-    prompts, tools, events, triggers = [], [], [], []
+    prompts, tools, events, triggers, says = [], [], [], [], []
     result_at = {}  # tool_use_id → 결과가 돌아온 시각
     for r in records:
         if r.get("type") == "user" and isinstance((r.get("message") or {}).get("content"), list):
@@ -160,6 +160,8 @@ def parse(path, windows=None):
             content = (r.get("message") or {}).get("content")
             if isinstance(content, list):
                 for b in content:
+                    if isinstance(b, dict) and b.get("type") == "text" and (b.get("text") or "").strip():
+                        says.append((t, b["text"]))
                     if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name"):
                         inp = b.get("input") or {}
                         call = {"at": iso(t), "name": b["name"], "input": inp, "paths": paths_from_input(inp), "id": b.get("id")}
@@ -195,6 +197,7 @@ def parse(path, windows=None):
         x["end"] = iso(e) if e else None
     s.turns = turns
     s.human_prompts = [{"at": iso(t), "text": x} for t, x in prompts]
+    s.assistant_texts = [{"at": iso(t), "text": x} for t, x in sorted(says, key=lambda y: y[0])]
     s.human_turns = len(prompts)
     s.tool_calls = tools
     s.agent_sec = round(span_sec(turns), 1)

@@ -165,3 +165,56 @@ class OverdesignPromptTest(HarnessTestCase):
                  "logs/README.md"]
         conv = overdesign.convention_files(self.root, task, files)
         self.assertEqual(conv, {"logs/261114_다_인터뷰.md", "logs/261114_다_인터뷰_transcript.md"})
+
+
+class OverdesignApprovedPlanTest(HarnessTestCase):
+    """사람이 "ㄱㄱ"만 하고 계획은 직전 어시스턴트 제안에 있던 흐름 — 그 계획을 요청으로 넣는다(2026-11-15 현장)."""
+
+    def _fake(self, start_text):
+        return types.SimpleNamespace(
+            human_prompts=[{"at": "2026-11-15T01:00:00+09:00", "text": "모션으로 고도화할 부분 점검해줘"},
+                           {"at": "2026-11-15T01:20:00+09:00", "text": start_text}],
+            assistant_texts=[{"at": "2026-11-15T00:50:00+09:00", "text": "옛 답(이전 요청 전)"},
+                             {"at": "2026-11-15T01:10:00+09:00", "text": "A 크로스페이드 · B 강조 · C 그림 확대"},
+                             {"at": "2026-11-15T01:30:00+09:00", "text": "작업 뒤 보고"}])
+
+    def test_short_ack_includes_previous_proposal(self):
+        with mock.patch("vmc_harness.sessions.parse", return_value=self._fake("ㄱㄱ")):
+            out = overdesign._prompts_text("x.jsonl", "claude", 4000, since="2026-11-15T01:21:00+09:00",
+                                           plan_max_chars=3000, short_max_chars=12)
+        self.assertIn("[사람이 승인한 계획 — 직전 어시스턴트 제안]\nA 크로스페이드 · B 강조 · C 그림 확대", out)
+        self.assertNotIn("옛 답", out)
+        self.assertNotIn("작업 뒤 보고", out)
+        self.assertLess(out.index("[사람이 승인한 계획"), out.index("[이번 작업을 시작한 사람 지시]\nㄱㄱ"))
+
+    def test_long_instruction_does_not_add_plan(self):
+        with mock.patch("vmc_harness.sessions.parse", return_value=self._fake("장표를 시안 1-A로 다시 만들어서 올려줘")):
+            out = overdesign._prompts_text("x.jsonl", "claude", 4000, since="2026-11-15T01:21:00+09:00",
+                                           plan_max_chars=3000, short_max_chars=12)
+        self.assertNotIn("승인한 계획", out)
+
+    def test_plan_off_when_zero(self):
+        with mock.patch("vmc_harness.sessions.parse", return_value=self._fake("ㄱㄱ")):
+            out = overdesign._prompts_text("x.jsonl", "claude", 4000, since="2026-11-15T01:21:00+09:00")
+        self.assertNotIn("승인한 계획", out)
+
+    def test_system_prompt_excludes_fixes(self):
+        self.assertIn("결함을 바로잡은 것", overdesign.OD_SYSTEM)
+        self.assertIn("승인한 계획", overdesign.OD_SYSTEM)
+
+
+class OverdesignExistingUsageTest(HarnessTestCase):
+    """'쓰이지 않는 장치'라고 지목한 이름이 저장소 다른 파일에서 이미 쓰이면 기존 관례 — 신호에서 뺀다(2026-11-15 현장)."""
+
+    def test_unused_claim_dropped_when_used_elsewhere(self):
+        self.write("app/deck/shell.tsx", "const isHero = el.type.isHero;\n")
+        self.write("app/deck/cs.css", ".yp-body:has(.cs-top) { top: 0 }\n")
+        self.write("app/new/page.tsx", "<div className=\"cs-top\" />\nFrame.isHero = true;\n")
+        self.commit()
+        sigs = [{"kind": "unrequested_option", "path": "app/new/page.tsx",
+                 "name": "쓰이지 않는 것으로 보이는 cs-top div와 isHero 플래그"},
+                {"kind": "unrequested_option", "path": "app/new/page.tsx", "name": "새 --verbose 옵션 추가"},
+                {"kind": "unrequested_option", "path": "app/new/page.tsx", "name": "쓰이지 않는 newKnobXyz 설정"}]
+        keep, dropped = overdesign.existing_usage(self.root, sigs, ["app/new/page.tsx"])
+        self.assertEqual([s["name"] for s in dropped], ["쓰이지 않는 것으로 보이는 cs-top div와 isHero 플래그"])
+        self.assertEqual(len(keep), 2)

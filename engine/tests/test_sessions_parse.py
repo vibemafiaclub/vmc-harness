@@ -68,6 +68,7 @@ class ClaudeParseTest(HarnessTestCase):
         self.assertEqual(s.session_id, "s1")
         self.assertEqual(s.human_turns, 2)
         self.assertEqual([p["text"] for p in s.human_prompts], ["버튼 고쳐줘", "하나 더"])
+        self.assertEqual([p["text"] for p in s.assistant_texts], ["볼게요", "끝", "네"])   # 도구 호출·서브에이전트 제외
         # 턴1: 10:00:00→10:01:01 = 61초, 턴2: 10:10:00→10:10:30 = 30초 (사람 대기 제외)
         self.assertAlmostEqual(s.agent_sec, 91.0)
         # m1 한 번(115) + m2(2) + m3(4) + 서브에이전트(100)

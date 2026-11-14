@@ -19,6 +19,8 @@ overdesign_diff_max_chars = 20000  # unit=chars md=yes spec=03 measured=no — L
 overdesign_prompt_max_chars = 4000 # unit=chars md=yes spec=03 measured=no — LLM 판정에 넣는 사람 지시문 상한(이번 작업 지시)
 overdesign_prior_prompt_max_chars = 800 # unit=chars md=yes spec=03 measured=no — 이번 작업 전 대화를 맥락으로 넣는 상한
 overdesign_convention_min = 2    # unit=files md=no spec=03 measured=no — 같은 폴더·같은 이름 끝 파일이 이만큼 있으면 새 파일을 기존 관례로 보고 LLM 신호에서 뺀다
+overdesign_short_ack_max_chars = 12  # unit=chars md=yes spec=03 measured=no — 이번 작업을 시작한 사람 지시가 이 길이 이하("ㄱㄱ" 등)면 직전 어시스턴트 제안을 승인된 계획으로 판정에 넣는다
+overdesign_plan_max_chars = 3000  # unit=chars md=yes spec=03 measured=no — 판정에 넣는 승인된 계획(직전 어시스턴트 제안) 상한(뒤쪽을 남긴다)
 dup_similarity = 0.92            # unit=ratio md=no spec=03 measured=no — 정규화 AST 토큰 유사도(이상이면 거의 같은 함수)
 dup_min_nodes = 25               # unit=nodes md=no spec=03 measured=no — 이보다 작은 함수는 유사도 비교 안 함(작은 함수는 우연히 닮는다)
 dup_scan_max_files = 3000        # unit=files md=no spec=03 measured=no — 기존 함수 비교 대상 파일 상한(편의 장치 비용 상한)
