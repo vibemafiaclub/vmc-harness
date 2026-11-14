@@ -3,6 +3,8 @@
 이번 작업에서 페이지·API·DB 동작이 바뀌었는데 실제 동작 증거(하네스 마커)가 마지막 편집 이후에 없으면 종료를 막고 빠진 것만 알린다.
 - "이번 작업이 바꾼 것"은 task.scope.touched(착수 스냅샷 이후 바뀐 파일 중 이 작업이 쓴 것 — 모든 게이트 공용, 하네스가 쓴 파일·착수 전 변경·다른 세션 쓰기 제외)
 - 증거를 무효로 만드는 "마지막 편집"은 동작 파일(page·api·db, 영향 반경이면 그 소스)의 편집만 — 문서·다른 파일 편집은 아니다(현장 결함 C5)
+- 증거보다 수정 시각이 늦어도, 증거가 이 세션의 마지막 도구 쓰기(state.write_ns) 뒤에 만들어졌고 내용이 증거를 남긴 순간과 같으면 인정한다
+  (마커의 tree_sha — 다른 세션의 git autostash가 같은 내용을 다시 써 시각만 늦춘 경우, 2026-11-15)
 - 발동 조건: 바뀐 파일 중 동작 파일(page·api·db glob)이 있을 때. 중·대 작업은 영향 반경(impact)이 페이지·API에 닿아도 발동.
   소 작업은 직접 바뀐 동작 파일만 본다(페이지·DB가 안 바뀐 작업엔 발동하지 않음)
 - 인정: screenshot·api_call·db_dryrun·test_run(기준선 대비 새 실패 0건)·qa_scenario
@@ -43,6 +45,37 @@ def _mtime(root, rel):
         return _dt.datetime.fromtimestamp((Path(root) / rel).stat().st_mtime).astimezone()
     except OSError:
         return None
+
+
+def file_sha(root, rel):
+    try:
+        h = hashlib.sha256()
+        with open(Path(root) / rel, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 16), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def own_write_time(root, session_id, files):
+    """이 세션이 도구로 그 파일들을 마지막으로 쓴 시각(state.write_ns). 하나라도 기록이 없으면 None —
+    스크립트 쓰기 등 기록 밖 편집이 있을 수 있으니 내용 비교로 인정하지 않는다."""
+    import datetime as _dt
+    w = state.load(root, session_id).get("write_ns") or {}
+    ns = [w.get(f) for f in files]
+    if not ns or not all(isinstance(x, int) for x in ns):
+        return None
+    return _dt.datetime.fromtimestamp(max(ns) / 1000 / 1000 / 1000).astimezone()  # ns → 초
+
+
+def same_content(marker, current):
+    """증거를 남긴 순간과 지금, 동작 파일들의 내용이 모두 같은가 — 시각만 늦어진 파일(다른 세션의 git autostash 등)로
+    증거를 무효로 보지 않는다(2026-11-15 현장). 증거에 해시가 없는(옛) 마커·적지 못한 파일은 False."""
+    snap = marker.get("tree_sha")
+    if not isinstance(snap, dict) or not current:
+        return False
+    return all(sha is not None and snap.get(f) == sha for f, sha in current.items())
 
 
 def last_edit(root, files):
@@ -97,7 +130,17 @@ def evaluate(root, session_id, task):
     tkey = state.task_key(root, session_id, (task or {}).get("task_id"))
     edit_at = last_edit(root, beh_files)
     markers = evidence.list_markers(root, tkey)
-    fresh = [m for m in markers if (edit_at is None or (evidence.marker_time(m) and evidence.marker_time(m) >= edit_at))]
+    current = {f: file_sha(root, f) for f in beh_files}
+    own_at = own_write_time(root, session_id, beh_files)
+
+    def _fresh(m):
+        t = evidence.marker_time(m)
+        if edit_at is None or (t and t >= edit_at):
+            return True
+        # 수정 시각만 늦어진 경우(다른 세션의 git autostash 등): 이 세션의 마지막 쓰기 뒤에 만든 증거이고,
+        # 증거를 남긴 순간과 지금 내용이 같으면 인정(2026-11-15 현장). 옛 스크린샷 재사용 방지는 그대로(t ≥ 이 세션의 쓰기).
+        return bool(t and own_at and t >= own_at and same_content(m, current))
+    fresh = [m for m in markers if _fresh(m)]
     good = [m for m in fresh if evidence.marker_ok(m)]
     missing = []
     if not good:

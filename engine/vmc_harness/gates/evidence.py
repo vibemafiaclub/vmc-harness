@@ -41,8 +41,36 @@ def _new_id():
     return now().strftime("%Y%m%dT%H%M%S%f") + "-" + os.urandom(3).hex()
 
 
+def worktree_hashes(root):
+    """증거를 남기는 순간 작업 트리에서 바뀐 파일(미커밋·미추적)의 내용 sha256 — {상대 경로: sha}.
+    완료 게이트가 '마지막 편집 이후 증거'를 파일 수정 시각만으로 재면, 다른 세션의 git autostash가 같은 내용을
+    다시 써 시각만 늦춘 파일 때문에 멀쩡한 증거를 무효로 본다(2026-11-15 현장). 내용이 그대로면 증거를 인정하는 데 쓴다.
+    상한(gates.evidence_snapshot_max_files)을 넘는 파일은 적지 않는다 — 그 파일은 시각 비교로만 판정된다."""
+    from vmc_harness.core import gitutil
+    rc, out, _ = gitutil.git(root, "status", "--porcelain", "-z", "-uall")
+    if rc != 0:
+        return {}
+    cap = int(config.get("gates.evidence_snapshot_max_files", root))
+    res = {}
+    for ent in gitutil.split_z(out):
+        rel = ent[3:] if len(ent) > 3 else ""
+        if not rel or rel.startswith(".harness/"):
+            continue
+        p = Path(root) / rel
+        if not p.is_file():
+            continue
+        if len(res) >= cap:
+            break
+        try:
+            res[rel] = _sha(p)
+        except OSError:
+            pass
+    return res
+
+
 def make(root, task_id, kind, target, src_path=None, data=None):
-    """증거 산출물 + 마커. src_path는 복사(스크린샷 등), data는 JSON으로 저장. 마커 dict를 돌려준다."""
+    """증거 산출물 + 마커. src_path는 복사(스크린샷 등), data는 JSON으로 저장. 마커 dict를 돌려준다.
+    마커에 그 순간 바뀐 파일들의 내용 해시(tree_sha)를 함께 남긴다 — completion이 내용이 그대로인지 본다."""
     if kind not in KINDS:
         raise ValueError("증거 종류가 인정 목록 밖: %s" % kind)
     d = paths.ensure(evidence_dir(root, task_id))
@@ -52,7 +80,8 @@ def make(root, task_id, kind, target, src_path=None, data=None):
             return dup
     mid = _new_id()
     marker = {"marker_id": mid, "task_id": task_id, "created_at": now().isoformat(), "kind": kind,
-              "target": target, "file": None, "sha256": None, "by": "vmc-harness", "kernel_version": KERNEL_VERSION}
+              "target": target, "file": None, "sha256": None, "by": "vmc-harness", "kernel_version": KERNEL_VERSION,
+              "tree_sha": worktree_hashes(root)}
     if src_path:
         sp = Path(src_path)
         if not sp.is_file():
