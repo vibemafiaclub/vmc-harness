@@ -9,6 +9,8 @@
         출고 기준 scripts/release-gate.json: 시나리오 테스트 파일이 없거나, 고객 환경 미확인(open) 항목을 --accept-open으로
         하나하나 인정하지 않으면 거부한다. 인정한 항목은 manifest.unverified·릴리스 노트에 '시험 기능'으로 실린다
         환경변수: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, (R2_BUCKET=vmc-harness-releases), DATABASE_URL(없으면 ~/.config/vmc-db/env)
+        R2 값이 환경변수에 없으면 macOS 키체인 항목 vmc-harness-r2-release(계정 account_id·access_key_id·secret_access_key)를
+        이 스크립트가 직접 읽는다(값은 출력하지 않음)
   <bundle-info JSON> | python3 scripts/release.py bundle --zip <릴리스 zip> [--out DIR]
         오프라인 번들(USB 전달용). bundle-info는 context-hub에서:
           pnpm -C packages/db exec tsx scripts/harness-license.ts bundle-info <license_id> | python3 scripts/release.py bundle --zip dist/vmc-harness-0.1.0.zip
@@ -183,12 +185,32 @@ def sigv4(method, host, path, headers, payload_hash, access_key, secret_key, reg
     return "AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s" % (access_key, scope, signed, sig), sig
 
 
+R2_KEYCHAIN_SERVICE = "vmc-harness-r2-release"
+_R2_KEYCHAIN_ACCOUNT = {"R2_ACCOUNT_ID": "account_id", "R2_ACCESS_KEY_ID": "access_key_id",
+                        "R2_SECRET_ACCESS_KEY": "secret_access_key"}
+
+
+def _keychain(account):
+    """macOS 키체인 항목 vmc-harness-r2-release에서 값 하나(없거나 macOS가 아니면 None). 값은 반환만 하고 출력하지 않는다.
+    에이전트가 명령에 키체인 조회를 직접 쓰지 않게 스크립트가 읽는다(하네스 비밀값 게이트 — 값이 대화에 나오지 않는 게 지킬 선)."""
+    exe = shutil.which("security")
+    if not exe:
+        return None
+    r = subprocess.run([exe, "find-generic-password", "-s", R2_KEYCHAIN_SERVICE, "-a", account, "-w"],
+                       capture_output=True, text=True)
+    v = (r.stdout or "").strip() if r.returncode == 0 else ""
+    return v or None
+
+
 def r2_config():
+    """R2 접속 값 — 환경변수가 우선, 없으면 키체인."""
     env = os.environ
-    missing = [k for k in ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY") if not env.get(k)]
+    vals = {k: env.get(k) or _keychain(acct) for k, acct in _R2_KEYCHAIN_ACCOUNT.items()}
+    missing = [k for k, v in vals.items() if not v]
     if missing:
-        raise SystemExit("R2 환경변수 없음: %s" % ", ".join(missing))
-    return {"account": env["R2_ACCOUNT_ID"], "ak": env["R2_ACCESS_KEY_ID"], "sk": env["R2_SECRET_ACCESS_KEY"],
+        raise SystemExit("R2 접속 값 없음: %s — 환경변수로 주거나 키체인 항목 %s(계정 %s)에 넣는다"
+                         % (", ".join(missing), R2_KEYCHAIN_SERVICE, ", ".join(_R2_KEYCHAIN_ACCOUNT[k] for k in missing)))
+    return {"account": vals["R2_ACCOUNT_ID"], "ak": vals["R2_ACCESS_KEY_ID"], "sk": vals["R2_SECRET_ACCESS_KEY"],
             "bucket": env.get("R2_BUCKET") or "vmc-harness-releases"}
 
 
