@@ -6,6 +6,11 @@ min_interval_h = 20          # unit=h md=no spec=04 measured=no 세션 시작 �
 revert_scan_commits = 200    # unit=commits md=no spec=04 사람 git revert 감지 때 훑는 최근 커밋 수
 min_days = 3                 # unit=days md=no spec=04 measured=no 존속(kept) 최소 시험 기간 — 노출을 하루 만에 채워도 이 기간 전엔 존속 안 함
 min_hits = 5                 # unit=count md=no spec=04 measured=no 존속 최소 해당 수(노출) — 프로파일이 judge.exposures를 낮춰도 이 밑으론 존속 안 함
+auto_side_min_blocks = 3     # unit=count md=no spec=04 measured=no 자동 반영 게이트: 막은 횟수가 이 이상일 때만 헛막기·반박 비율을 본다
+auto_side_bad_ratio = 0.3    # unit=ratio md=no spec=04 measured=no 자동 반영 게이트: (헛막기 + 에이전트 반박) / 막은 횟수가 이 이상이면 원복
+auto_signal_min_sessions = 10  # unit=sessions md=no spec=04 measured=no 자동 반영 조치: 반영 뒤 사람이 연 대화가 이만큼 쌓여야 근거 신호 증감을 판정한다
+auto_signal_min_drop = 0.3   # unit=ratio md=no spec=04 measured=no 자동 반영 조치: 근거 신호(대화당 횟수)가 반영 전보다 이 비율 이상 줄지 않으면 원복, 줄었으면 존속 근거
+auto_new_failures_max = 0    # unit=tests md=no spec=04 자동 반영 조치: 반영 뒤 다시 잰 테스트 기준선에 그 조치가 바꾼 모듈의 새 실패가 이보다 많으면 원복
 spawn_grace_min = 30         # unit=min md=no spec=04 measured=no 세션 시작 분리 실행이 이 시간 안에 안 끝나면 실패로 기록하고 다시 돌린다
 
 [health]
