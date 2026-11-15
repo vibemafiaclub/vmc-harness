@@ -149,7 +149,9 @@ def _call_additive(ctx, op):
 
 
 def _tracked_under(root, rel):
-    rc, out, _ = git(root, "ls-files", "--", rel)
+    # 지울 대상에 와일드카드가 있으면(`rm -f *.png`) 그 폴더 안만 — git 기본 pathspec의 `*`는 `/`도 넘어 하위 폴더 전체를 잡는다
+    spec = (":(glob)" + rel) if any(c in rel for c in "*?[") else rel
+    rc, out, _ = git(root, "ls-files", "--", spec)
     return [l.strip() for l in out.splitlines() if l.strip()] if rc == 0 else []
 
 

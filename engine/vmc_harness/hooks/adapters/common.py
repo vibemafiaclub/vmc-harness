@@ -75,7 +75,7 @@ def build(event, agent, raw, root, tool_alias=None):
         if cmd:
             ctx.command = cmd
             ctx.tool_name = "Bash"
-            a = shell.analyze(cmd)
+            a = shell.analyze(cmd, cwd=cwd)
             ctx.state["shell_opaque"] = a["opaque"]
             ctx.state["shell_opaque_cmds"] = a.get("opaque_cmds") or []
             for p in a["writes"]:
