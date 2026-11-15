@@ -463,11 +463,11 @@ def budget_status(root, extra_ms=0.0):
 
 def create(root, title, basis, trigger, script_text, targets=None, human_criterion=None, calls_human=False,
            hypothesis=None, gate_id=None, measure=True, requires=None):
-    """게이트 생성. 근거 타입은 사람 명시 요청(원문+출처)·기계 사실(읽은 명령)만(01 P3 — core.ledger 메타 게이트가 강제).
-    반환: {'meta','cost_line','over_budget'}"""
+    """게이트 생성. 근거 타입은 사람 명시 요청(원문+출처)·기계 사실(읽은 명령)·진단 자동 반영(기계 검사 전부 통과 — spec 07)만
+    (01 P3 — core.ledger 메타 게이트가 강제). 반환: {'meta','cost_line','over_budget'}"""
     btype = (basis or {}).get("type")
-    if btype not in ("explicit_request", "machine_fact"):
-        raise ledger.MetaGateError("게이트 근거는 사람 명시 요청·기계 사실뿐")
+    if btype not in ("explicit_request", "machine_fact", "diagnosis_auto"):
+        raise ledger.MetaGateError("게이트 근거는 사람 명시 요청·기계 사실·진단 자동 반영뿐")
     if btype == "explicit_request" and not (basis.get("source") or {}).get("date"):
         raise ledger.MetaGateError("명시 요청 근거에 출처(세션·날짜·작업 영역) 없음")
     tr = dict(trigger or {})

@@ -174,7 +174,25 @@ def _unapply_layer(root, action, status="reverted"):
             pass
     if t.get("gate_id") and set_gate_status(root, t["gate_id"], status):
         done.append("gate")
+    if t.get("protected") and status in ("reverted", "disabled") and drop_protected(root, action["action_id"]):
+        done.append("protected")
     return done
+
+
+def drop_protected(root, action_id):
+    """그 조치로 넣은 보호 영역 항목(action_id가 같은 것)을 protected.json에서 뺀다. 뺀 수."""
+    p = paths.harness_dir(root) / "protected.json"
+    data = read_json(p, None)
+    if data is None:
+        return 0
+    items = data.get("paths", []) if isinstance(data, dict) else data
+    keep = [it for it in items or [] if not (isinstance(it, dict) and it.get("action_id") == action_id)]
+    n = len(items or []) - len(keep)
+    if n:
+        if isinstance(data, dict):
+            data["paths"] = keep
+        write_json(p, data if isinstance(data, dict) else {"paths": keep})
+    return n
 
 
 # ---- 미룬 원복 ----

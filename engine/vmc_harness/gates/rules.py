@@ -136,6 +136,13 @@ def render_block(root, data=None):
             else:
                 lines.append("- \"%s\" — 출처: %s" % (b.get("quote", ""), where or "-"))
         lines.append("")
+    auto = [r for r in _rules(data) if _basis(r).get("type") == "diagnosis_auto" and r.get("enabled", True)
+            and (r.get("rule_text") or "").strip()]
+    if auto:
+        lines.append("### 진단이 자동으로 넣은 규칙 (시험 중 — 되돌리기 `vmc-harness revert <조치>`)")
+        for r in auto:
+            lines.append("- %s — 조치 %s" % (r["rule_text"].strip(), r.get("action_id") or "-"))
+        lines.append("")
     tools = list(data.get("tools") or DEFAULT_TOOLS)
     if _db_configured(root) and DB_TOOL not in tools:
         tools.append(DB_TOOL)
@@ -252,15 +259,17 @@ def _rid():
     return "r-%s" % os.urandom(3).hex()
 
 
-def add_explicit(root, quote, source, action_id=None, rule_text=None, requires=None):
+def add_explicit(root, quote, source, action_id=None, rule_text=None, requires=None, basis=None):
     """사람 명시 요청 규칙 — 원문 그대로 + 출처. 진단 [추가]면 rule_text(제안에 보인 규칙 문장)를 함께 —
-    requires(기계 확인 전제조건)가 있으면 꺼진 채 두고 조건이 맞으면 bootstrap.requires.enable_ready가 켠다."""
+    requires(기계 확인 전제조건)가 있으면 꺼진 채 두고 조건이 맞으면 bootstrap.requires.enable_ready가 켠다.
+    basis(진단 자동 반영 — diagnosis_auto)를 주면 그 근거로 남는다 — 블록에는 '사람이 정한 규칙'이 아니라 따로 싣는다."""
     if not (quote or "").strip():
         raise ValueError("규칙 원문 없음")
     if not (source or {}).get("date"):
         raise ValueError("규칙 출처(날짜) 없음")
     data = load(root)
-    r = {"id": _rid(), "basis": {"type": "explicit_request", "quote": quote, "source": source},
+    b = dict(basis, quote=quote, source=source) if basis else {"type": "explicit_request", "quote": quote, "source": source}
+    r = {"id": _rid(), "basis": b,
          "action_id": action_id, "created_at": now_iso(), "enabled": not requires}
     if rule_text:
         r["rule_text"] = rule_text.strip()

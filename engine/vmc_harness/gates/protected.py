@@ -101,6 +101,17 @@ def ensure_declared_approval(root, task):
     return _create(root, task, hit, [], True)
 
 
+def _exposure(root, m):
+    """보호 영역 조건이 해당한 때 = 그 항목을 넣은 조치의 노출(04 판정 — 노출이 없으면 사람이 요청하지 않은 보호 영역은
+    기간 끝에 원복된다). 편의 기록 — 실패해도 막기는 그대로."""
+    try:
+        from vmc_harness.ledger import exposure
+        for aid in sorted({e.get("action_id") for e in entries(root) if e.get("action_id") and e["glob"] in m}):
+            exposure.record(root, action_id=aid)
+    except Exception:
+        pass
+
+
 def check(ctx, task):
     rels = list(ctx.write_paths or [])
     if not rels:
@@ -108,6 +119,7 @@ def check(ctx, task):
     m = matched(ctx.root, rels)
     if not m:
         return None
+    _exposure(ctx.root, m)
     need = set(m)
     hit_paths = sorted({p for v in m.values() for p in v})
     if not task or not task.get("task_id"):
