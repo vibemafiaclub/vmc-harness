@@ -11,7 +11,7 @@
   tighten   gate·protected는 만드는 일 자체가 조이기(코드 사실). rule·structure는 direction == "tighten"이고
             제목·규칙 문장에 '안전 장치 + 푸는 말'(LOOSEN)이 없을 때
   domain    커널(.harness/ 상태·레포 밖 경로·하네스 엔진)·외부 발송·결제·삭제에 닿지 않는다(제목·규칙 문장·대상·조건 글자)
-  backtest  gate: 하네스가 다시 돌린 백테스트(없으면 모델 값)가 있고 problem_changes ≤ autoapply.gate_max_problem_changes.
+  backtest  gate: 하네스가 다시 돌린 백테스트(없으면 모델 값)가 있고 problem_changes ≥ autoapply.gate_min_problem_changes(실제 문제를 잡은 증거).
             조건이 db_direct·test_modify면 커널 안전 게이트가 이미 막는다 — 반영할 것 없음
   signal    rule·structure: 효과를 잴 신호(signal)가 형식에 맞고 지난 대화 기록에서 실제로 났다(대화당 횟수 > 0)
             — 판정이 반영 전후로 셀 수 없는 것은 자동으로 넣지 않는다
@@ -249,9 +249,11 @@ def evaluate(root, p, sessions=None):
         elif bt is None:
             put("backtest", False, "백테스트 결과 없음")
         else:
-            lim = config.get("autoapply.gate_max_problem_changes", root)
-            put("backtest", bt["problem_changes"] <= lim,
-                "백테스트 문제가 된 변경 %d건(%s) > %d" % (bt["problem_changes"], src, lim))
+            # problem_changes = 그 게이트가 막았을 변경 중 뒤에 고쳐지거나 되돌려진 것(실제 문제를 잡은 증거).
+            # 실제 문제를 잡은 적 없는 게이트는 막는 비용만 남으니 자동 반영하지 않는다. 헛막기는 판정의 반박 비율로 원복한다
+            lim = config.get("autoapply.gate_min_problem_changes", root)
+            put("backtest", bt["problem_changes"] >= lim,
+                "백테스트에서 실제 문제를 잡은 변경 %d건(%s) < %d" % (bt["problem_changes"], src, lim))
     else:
         put("backtest", True)
     if kind in ("rule", "structure"):

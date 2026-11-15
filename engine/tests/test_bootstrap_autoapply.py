@@ -67,7 +67,7 @@ class AutoApplyCase(LoopTestCase):
 
 class ChecksTest(AutoApplyCase):
     def test_applies_only_proposals_passing_every_check(self):
-        gate_bt = {"would_block": 3, "problem_changes": 0, "scenes": []}
+        gate_bt = {"would_block": 3, "problem_changes": 1, "scenes": []}
         self.diagnosis([
             P("타입 검사는 정해 둔 명령으로만 돌린다", "rule", rule_text="타입 검사는 `npm run typecheck`로만 돌린다.", signal=SIG_TSC),
             P("다른 레포 커밋 금지", "rule", rule_text="다른 레포는 고치지 않는다.", signal=SIG_TSC,
@@ -76,7 +76,7 @@ class ChecksTest(AutoApplyCase):
             P("되돌릴 수 있는 작업은 진행 허락을 묻지 않고 끝까지 하기", "rule", rule_text="진행 허락을 묻지 않는다.", signal=SIG_TSC),
             P("훅을 끈다", "rule", rule_text="훅을 쓴다.", signal=SIG_TSC, direction="loosen"),
             P("임시 스크립트 쓰기 막기", "gate", condition={"type": "path_write", "globs": ["**/*.tmp.*"]},
-              backtest={"would_block": 4, "problem_changes": 2, "scenes": []}),
+              backtest={"would_block": 4, "problem_changes": 0, "scenes": []}),
             P("`send.py`가 모든 발송 기록을 남기게 하기", "structure", targets=["scripts/send.py"], signal=SIG_TSC),
             P("레포 밖 경로 쓰기 막기", "gate", condition={"type": "path_write", "globs": ["**/*.secret"]}, backtest=gate_bt),
             P("신호가 없던 규칙", "rule", rule_text="무엇을 한다.", signal={"type": "command", "regex": "never-ran"}),
@@ -91,7 +91,7 @@ class ChecksTest(AutoApplyCase):
         self.assertIn("충돌 칸 없음", why["충돌 칸 없는 규칙"])
         self.assertIn("푸는 말", why["되돌릴 수 있는 작업은 진행 허락을 묻지 않고 끝까지 하기"])
         self.assertIn("direction=loosen", why["훅을 끈다"])
-        self.assertIn("문제가 된 변경 2건", why["임시 스크립트 쓰기 막기"])
+        self.assertIn("실제 문제를 잡은 변경 0건", why["임시 스크립트 쓰기 막기"])
         self.assertIn("외부 발송", why["`send.py`가 모든 발송 기록을 남기게 하기"])
         self.assertIn("지난 대화 기록에 없음", why["신호가 없던 규칙"])
         self.assertIn("커널 안전 게이트", why["DB 직접 접속 막기"])
@@ -155,7 +155,7 @@ class ChecksTest(AutoApplyCase):
         cfg = read_json(self.root / ".harness/config.json")
         write_json(self.root / ".harness/config.json", dict(cfg, profile="gxp"))
         self.diagnosis([P("x 쓰기 막기", "gate", condition={"type": "path_write", "globs": ["**/*.x"]},
-                          backtest={"would_block": 1, "problem_changes": 0, "scenes": []})])
+                          backtest={"would_block": 1, "problem_changes": 1, "scenes": []})])
         self.assertEqual(autoapply.after_diagnosis(str(self.root), diagnose.load(self.root)), {"enabled": False})
         self.assertEqual(ledger.list_actions(self.root), [])
 
@@ -199,7 +199,9 @@ class DedupeTest(AutoApplyCase):
         with mock.patch("vmc_harness.core.llm.available", return_value=True), \
                 mock.patch("vmc_harness.core.llm.nested", return_value=False), \
                 mock.patch("vmc_harness.core.llm.claude_agent", return_value=fake), \
-                mock.patch.object(diagnose, "render_proposal", return_value={}):
+                mock.patch.object(diagnose, "render_proposal", return_value={}), \
+                mock.patch.object(autoapply, "_backtest_of",
+                                  return_value=({"would_block": 1, "problem_changes": 1}, "테스트")):
             d = diagnose.run(self.root, sessions=None)
         self.assertEqual([p["title"] for p in d["proposals"]], ["x 쓰기 막기"])
         self.assertEqual(d["checks"]["merged"][0]["by"], "게이트 조건")
@@ -308,7 +310,7 @@ class GateSideEffectTest(AutoApplyCase):
     def test_disputed_blocks_revert_auto_gate(self):
         from vmc_harness.ledger import judge
         self.diagnosis([P("x 쓰기 막기", "gate", condition={"type": "path_write", "globs": ["**/*.x"]},
-                          backtest={"would_block": 1, "problem_changes": 0, "scenes": []})])
+                          backtest={"would_block": 1, "problem_changes": 1, "scenes": []})])
         autoapply.apply(str(self.root), structure=False)
         a = [x for x in ledger.list_actions(self.root) if x["layer"] == "gate"][0]
         gid = a["target"]["gate_id"]
