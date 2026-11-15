@@ -4,7 +4,7 @@
   분리 실행이 기동·완료되지 않으면 다음 판단 때 실패로 기록한다(judge.due). 밤 루프 tick도 같은 판정을 돌린다(loop/tick.py)
   분리 실행 = 집계 → 사람 git revert 감지 → 미룬 원복 → 판정 → 승격 → (SessionEnd가 없던) 지난 세션 자가 점검 → 낡은 문서 검출
 - PostToolUse: 클렌징 변경 영역 작업 노출(세션·조치당 1회), 낡은 문서·그 영역을 만지면 한 줄 알림
-- SessionEnd: 자가 점검 분리 실행(세션 1회)
+- SessionEnd: 자가 점검 분리 실행(SessionEnd마다 — 지난 점검 뒤 새 구간만)
 """
 
 import os
@@ -116,9 +116,8 @@ def on_post_tool(ctx):
 def on_session_end(ctx):
     if llm.nested() or not ctx.root or not ctx.transcript_path:
         return None
-    key = ctx.session_id or ctx.transcript_path
-    if not _seen(ctx.root, "selfcheck:%s" % key):
-        return None
+    # 세션마다가 아니라 SessionEnd마다 — 이어 쓴 세션(--resume)은 턴마다 끝나므로 새 구간을 그때그때 본다.
+    # 이미 본 구간을 다시 세지 않는 건 selfcheck 커서가 맡는다(selfcheck-done.json)
     args = ["selfcheck", "--session", ctx.transcript_path, "--agent", ctx.agent or "claude"]
     if ctx.session_id:
         args += ["--session-id", ctx.session_id]
