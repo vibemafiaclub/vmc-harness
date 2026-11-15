@@ -165,7 +165,9 @@ class LifecycleScenarioTest(HarnessTestCase):
         self.assertEqual(ra["actual"]["agent_sec"], 19 * 60.0)        # 턴 09:00~09:25 ∩ A 구간 09:01~09:20
         self.assertEqual(rb["actual"]["tokens"], 10 + 500 + 20)
         self.assertEqual(rb["actual"]["agent_sec"], 5 * 60.0)          # 09:20~09:25
-        self.assertEqual(ra["actual"]["human_turns"], 0)               # 사람 메시지(09:00)는 선언 전
+        # 사람 메시지(09:00)는 선언(09:01) 전이지만 그 턴이 A로 이어졌다 — A에 센다(0.1.12 전엔 늘 0). B는 같은 턴을 안 센다
+        self.assertEqual(ra["actual"]["human_turns"], 1)
+        self.assertEqual(rb["actual"]["human_turns"], 0)
 
         # S2: 작업 C — 새 테스트 파일을 만들고 커밋한 뒤 다시 고쳐도 "기존 검증물 변조"가 아니다(C2)
         self.clock(at(0, 12, 41))
@@ -199,6 +201,7 @@ class LifecycleScenarioTest(HarnessTestCase):
         lifecycle.measure_pending(self.root)
         rb = self.rec(b["task_id"])
         self.assertEqual(rb["actual"]["tokens"], (10 + 500 + 20) + (1 + 3 + 2))   # 두 구간 합
+        self.assertEqual(rb["actual"]["human_turns"], 1)   # D2 10:00 메시지 — 다시 연 시각(10:02)보다 먼저지만 B의 턴
         # D1 09:20~09:25 + D2 다시 연 시각(첫 도구 활동 10:02)~10:05 — 조용했던 하루는 세지 않는다
         self.assertEqual(rb["actual"]["agent_sec"], 5 * 60.0 + 3 * 60.0)
         self.assertTrue(ledger.metrics_path(self.root, "2026-10-28").exists())    # 끝난 날(D2) 집계

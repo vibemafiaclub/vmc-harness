@@ -149,6 +149,7 @@ def parse(path, windows=None):
             in_turn = [e for e in events if e >= start and (nxt is None or e < nxt)]
         if in_turn:
             turns.append((start, max(in_turn)))
+    s.prompt_times = [iso(t) for t, _ in prompts]
     if windows is not None:
         prompts = [p for p in prompts if in_windows(p[0], windows)]
         tools = [x for x in tools if in_windows(ts(x["at"]), windows)]
