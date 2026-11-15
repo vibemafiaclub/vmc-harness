@@ -7,7 +7,8 @@
   (마커의 tree_sha — 다른 세션의 git autostash가 같은 내용을 다시 써 시각만 늦춘 경우, 2026-11-15)
 - 발동 조건: 바뀐 파일 중 동작 파일(page·api·db glob)이 있을 때. 중·대 작업은 영향 반경(impact)이 페이지·API에 닿아도 발동.
   소 작업은 직접 바뀐 동작 파일만 본다(페이지·DB가 안 바뀐 작업엔 발동하지 않음)
-- 인정: screenshot·api_call·db_dryrun·test_run(기준선 대비 새 실패 0건)·qa_scenario
+- 인정: screenshot·api_call·db_dryrun·test_run(기준선 대비 새 실패 0건)·qa_scenario. 훅이 본 성공 실행의 자동 마커
+  (gates.auto_evidence — 테스트 종료 코드 0, 브라우저 화면 캡처)도 같은 마커다. 자동 화면 캡처는 페이지·영향 반경 변경에만
 - 결재 흐름(보호 영역 kind=approval_flow)에 닿으면 qa_scenario 증거 필수(안전선)
 - 같은 작업에서 막는 횟수 상한(gates.completion_max_blocks) — 넘으면 통과시키고 사람에게 꼭 알릴 일로 남긴다(무한 정지 방지)
 """
@@ -141,7 +142,10 @@ def evaluate(root, session_id, task):
         # 증거를 남긴 순간과 지금 내용이 같으면 인정(2026-11-15 현장). 옛 스크린샷 재사용 방지는 그대로(t ≥ 이 세션의 쓰기).
         return bool(t and own_at and t >= own_at and same_content(m, current))
     fresh = [m for m in markers if _fresh(m)]
-    good = [m for m in fresh if evidence.marker_ok(m)]
+    from vmc_harness.gates import auto_evidence
+    seen_page = bool(set(beh) & {"page", "impact"})
+    # 자동 화면 캡처(훅이 본 브라우저 캡처 실행)는 페이지·영향 반경 변경에만 — API·DB만 바뀌었으면 테스트·API·드라이런 증거로
+    good = [m for m in fresh if evidence.marker_ok(m) and (seen_page or not auto_evidence.is_auto_capture(m))]
     missing = []
     if not good:
         parts = ["%s: %s" % (LABEL.get(k, "영향 받는 페이지·API"), short_list(v)) for k, v in sorted(beh.items())]

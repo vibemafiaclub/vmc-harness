@@ -7,6 +7,7 @@ stdin JSON → 어댑터 정규화(HookContext) → HANDLER_MODULES 순서 호�
 - 주입은 core.inject 허용 목록만(01 P5): 유형 태그를 다시 검사하고 밖은 버린다. 착수 정보(declare_context)는 첫 편집 전에만
 - 실행 시간은 events(gate_time)에 남긴다
 - 검증 명령(테스트·빌드·린트·타입체크·git commit 훅 근사) 소요는 gates.verify_timing이 events(verify_run)에 남긴다.
+  성공한 테스트·브라우저 화면 캡처 실행은 gates.auto_evidence가 증거 마커로 남긴다(완료 게이트).
   PostToolUseFailure(Claude — 실패한 도구 호출은 PostToolUse 대신 이것만 온다, 2.1.308 실측)는 그 기록만 하고 다른 핸들러는 부르지 않는다
 """
 
@@ -151,7 +152,11 @@ def _verify_timing(ctx, event, result=None):
             if not (result and result.block):
                 verify_timing.on_pre(ctx)
         elif event in ("PostToolUse", "PostToolUseFailure"):
-            verify_timing.on_post(ctx, failed=(event == "PostToolUseFailure"))
+            rec = verify_timing.on_post(ctx, failed=(event == "PostToolUseFailure"))
+            if event == "PostToolUse":
+                # 마지막 편집 뒤 이미 돌린 테스트·화면 캡처를 증거로(gates.auto_evidence) — 실패한 실행은 아니다
+                from vmc_harness.gates import auto_evidence
+                auto_evidence.on_post(ctx, rec)
     except Exception as e:
         _log(ctx, "gate_error", module="gates.verify_timing", event=event, error=("%s: %s" % (type(e).__name__, e))[:300])
 

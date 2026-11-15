@@ -7,6 +7,7 @@ proceed_window_min = 30          # unit=min md=no spec=02 measured=no — 차단
 dispute_reason_max = 200        # unit=chars md=no spec=02 — 에이전트 반박(proceed --dispute) 근거 한 줄 상한. 참고 지표라 판정에 넣지 않는다
 proceed_phrases = ["그냥 진행", "그냥 해", "무시하고 진행", "막지 말고 진행", "proceed anyway", "just proceed"]  # unit=list md=no spec=00
 evidence_snapshot_max_files = 300  # unit=files md=no spec=02 measured=no — 증거를 남길 때 내용 해시를 적는 바뀐 파일 수 상한(completion이 시각 대신 내용으로 비교)
+auto_evidence_script_max_bytes = 200000  # unit=bytes md=no spec=02 measured=no — 실행 뒤 자동 증거: 인터프리터로 돌린 스크립트 파일에서 브라우저 캡처 호출을 찾을 때 읽는 크기 상한(넘으면 보지 않는다)
 approve_phrases = ["승인", "승인합니다", "승인해요", "승인해", "승인해줘", "승인해 주세요", "approve", "approved"]  # unit=list md=no spec=02 — 메타 게이트 차단 뒤(proceed_window_min 안) 사람 입력 전체가 이 문구면(공백·끝 문장부호 무시) 그 차단의 승인 카드를 승인. "승인하지 마"처럼 문구를 품은 다른 말은 아니다
 fact_refresh_hours = 24          # unit=h md=no spec=01 — 기계 사실 규칙의 읽은 명령 재실행 간격(세션 시작 때)
 fact_command_timeout_s = 20      # unit=s md=no spec=01
