@@ -218,3 +218,18 @@ class OverdesignExistingUsageTest(HarnessTestCase):
         keep, dropped = overdesign.existing_usage(self.root, sigs, ["app/new/page.tsx"])
         self.assertEqual([s["name"] for s in dropped], ["쓰이지 않는 것으로 보이는 cs-top div와 isHero 플래그"])
         self.assertEqual(len(keep), 2)
+
+
+class OverdesignBlockingTest(HarnessTestCase):
+    def test_new_file_signals_are_note_only(self):
+        sigs = [{"kind": "new_file_out_of_scope", "path": "a/b.md"}, {"kind": "new_module_out_of_scope", "path": "a"},
+                {"kind": "unreferenced_public", "path": "a/c.py", "name": "f"}]
+        self.assertEqual([s["kind"] for s in overdesign.blocking(sigs)], ["unreferenced_public"])
+
+    def test_shown_masks_numbers_and_drops_empty(self):
+        sigs = [{"kind": "unrequested_option", "path": None, "name": " "},
+                {"kind": "unrequested_option", "path": "a.md", "name": "요청에 없던 30분 알림 설정"},
+                {"kind": "unrequested_option", "path": None, "name": "예산 상한 옵션"}]
+        out = overdesign.shown(sigs)
+        self.assertEqual([s["name"] for s in out], ["요청에 없던 ○분 알림 설정"])
+        self.assertEqual(overdesign.shown([{"kind": "unrequested_option", "name": ""}]), [])

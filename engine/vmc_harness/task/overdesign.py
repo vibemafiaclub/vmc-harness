@@ -12,6 +12,8 @@ LLM 신호(중·대만, 새 컨텍스트, 목표만):
                           기존 관례를 따른 새 파일(같은 폴더·같은 이름 끝이 이미 여럿)은 신호에서 뺀다
 
 신호가 잡히면 축소 검토 1회만(handlers.on_stop). 메시지는 무엇이 잡혔는지만(01 P6).
+새 파일·새 모듈(NOTE_ONLY)은 막지 않는다 — 완료 보고 "범위 밖 변경"에 이미 나온다. 실측(11-11~16): 이 신호만으로 막은 8건은
+전부 재선언만 하고 결과물이 그대로였고, 결과물을 바꾼 차단 9건은 모두 다른 신호였다.
 """
 
 import ast
@@ -45,6 +47,8 @@ LABEL = {
     "near_duplicate_function": "기존 함수와 거의 같은 새 함수",
     "unrequested_option": "요청에 없는 옵션·기능",
 }
+# 막지 않고 완료 보고(범위 밖 변경)로만 보이는 신호
+NOTE_ONLY = ("new_file_out_of_scope", "new_module_out_of_scope")
 
 OD_SYSTEM = (
     "목표: 이번 작업의 요청 대비 과한 것을 찾아라 — 요청에 없는 옵션·설정·기능·확장 지점.\n"
@@ -806,7 +810,7 @@ def run_llm(root, task_id, transcript_path=None, agent=None):
             rec["tokens"] = res.get("tokens", 0)
             obj = parse_json_obj(res.get("text")) or {}
             for s in obj.get("signals") or []:
-                if isinstance(s, dict) and s.get("what"):
+                if isinstance(s, dict) and str(s.get("what") or "").strip():
                     rec["signals"].append({"kind": "unrequested_option", "path": s.get("path"),
                                            "name": str(s["what"])[:120]})
             rec["signals"] = own_signals(rec["signals"], files)
@@ -861,6 +865,29 @@ def existing_usage(root, signals, files):
         else:
             keep.append(sgl)
     return keep, dropped
+
+
+def shown(signals):
+    """막을 때 보일 신호 — 무엇이 잡혔는지 말할 수 있는 것만. 작업 중 주입 금지 숫자(시간·퍼센트 등)가 든 지적은 숫자를
+    가려 싣고, 그래도 실을 수 없거나 내용이 비면 뺀다. 이전에는 통째로 가린 '요청에 없는 옵션·기능 ' 빈 차단이 났다(2026-11-14 현장)."""
+    from vmc_harness.core import inject
+    out = []
+    for sgl in signals or []:
+        if not (str(sgl.get("name") or "").strip() or str(sgl.get("path") or "").strip()):
+            continue
+        if inject.message("gate_violation", describe([sgl])):
+            out.append(sgl)
+            continue
+        masked = dict(sgl, name=re.sub(r"\d+(?:[.,:~\-]\d+)*", "○", str(sgl.get("name") or "")),
+                      detail=re.sub(r"\d+(?:[.,:~\-]\d+)*", "○", str(sgl.get("detail") or "")) or None)
+        if (masked["name"].strip() or str(sgl.get("path") or "").strip()) and inject.message("gate_violation", describe([masked])):
+            out.append(masked)
+    return out
+
+
+def blocking(signals):
+    """막는 신호 — NOTE_ONLY(새 파일·새 모듈)는 완료 보고에만."""
+    return [s for s in signals or [] if s.get("kind") not in NOTE_ONLY]
 
 
 def own_signals(signals, files):
