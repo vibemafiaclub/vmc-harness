@@ -9,6 +9,11 @@
 - 존속·원복은 게이트 파일(.harness/gates/<id>.json)의 status·enabled에도 반영한다(revert.set_gate_status)
 - 업데이트 뒤 첫 판정에서 근거 없이 난 옛 존속(게이트가 실제로 막은 적 min_hits 미만)을 시험 중으로 되돌린다(migrate)
 - 기간이 끝났는데 노출 부족 → 원복. 단 사람이 요청한 조치(human_requested)는 노출 부족으로 원복하지 않는다 → extended
+- 진단 자동 반영(basis diagnosis_auto)은 부작용·효과 지표를 더 본다(side_effects — 코드로 센 숫자만, LLM 해석 없음):
+  그 게이트의 (헛막기 + 에이전트 반박) / 막은 횟수 ≥ judge.auto_side_bad_ratio(막은 횟수 judge.auto_side_min_blocks 이상일 때),
+  반영 뒤 다시 잰 테스트 기준선에서 바꾼 모듈의 새 실패 > judge.auto_new_failures_max,
+  반영 근거 신호(대화당 횟수)가 반영 뒤 대화 judge.auto_signal_min_sessions개 이상에서 judge.auto_signal_min_drop만큼 줄지 않음 → 원복.
+  신호가 그만큼 줄었고 judge.min_days가 지났으면 노출 수와 무관하게 존속(가설 효과를 잰 것)
 참고 지표(재발률·개입·보정·오버헤드)는 판정에 쓰지 않는다 — metrics.team()에만.
 """
 
@@ -119,6 +124,38 @@ def _evaluate_predict(root, action, findings, at):
     return None, "시험 중", nums
 
 
+def side_effects(root, action, rows, at=None):
+    """진단 자동 반영 조치의 부작용·효과(코드로 센 숫자만). (원복 이유|None, 효과 이유|None, 숫자)."""
+    since = count_since(action)
+    side = {}
+    gid = (action.get("target") or {}).get("gate_id")
+    if gid:
+        g = metrics.gate_totals(root, gid, since, rows)
+        bad = g["false_block"] + g["disputed"]
+        side.update(blocked=g["blocked"], disputed=g["disputed"], proceeded=g["false_block"])
+        if g["blocked"] >= config.get("judge.auto_side_min_blocks", root) and g["blocked"] and \
+                bad / float(g["blocked"]) >= config.get("judge.auto_side_bad_ratio", root):
+            return "자동 반영 게이트의 헛막기·반박 %d/%d회" % (bad, g["blocked"]), None, side
+    try:
+        from vmc_harness.bootstrap import autoapply
+    except ImportError:
+        return None, None, side
+    nf = autoapply.new_test_failures(root, action)
+    if nf is not None:
+        side["new_failures"] = len(nf)
+        if len(nf) > config.get("judge.auto_new_failures_max", root):
+            return "반영 뒤 테스트 새 실패 %d개(%s)" % (len(nf), ", ".join(nf[:3])), None, side
+    sg = autoapply.signal_after(root, action)
+    if sg:
+        side["signal"] = sg
+        if sg["sessions"] >= config.get("judge.auto_signal_min_sessions", root) and sg["after"] is not None:
+            target = sg["before"] * (1 - config.get("judge.auto_signal_min_drop", root))
+            if sg["after"] > target:
+                return "근거 신호가 줄지 않음(대화당 %.2f → %.2f, 대화 %d개)" % (sg["before"], sg["after"], sg["sessions"]), None, side
+            return None, "근거 신호 대화당 %.2f → %.2f(대화 %d개)" % (sg["before"], sg["after"], sg["sessions"]), side
+    return None, None, side
+
+
 def evaluate(root, action, findings, rows, at=None):
     """판정 1건. 반환 (result|None, reason, numbers). result: kept|reverted|extended|None(계속 시험)."""
     at = at or now()
@@ -134,6 +171,14 @@ def evaluate(root, action, findings, rows, at=None):
         return "reverted", "명시적 부정 %d건(revert·원인 지목·거절·삭제)" % hard, nums
     if fb > fb_limit:
         return "reverted", "헛막기 %d회(즉시 원복 기준 초과)" % fb, nums
+    if (action.get("basis") or {}).get("type") == "diagnosis_auto":
+        bad, good, side = side_effects(root, action, rows, at)
+        nums["side"] = side
+        if bad:
+            return "reverted", bad, nums
+        days = (at - (trial_start(action) or at)).total_seconds() / 86400.0
+        if good and not fb and days >= config.get("judge.min_days", root):
+            return "kept", good, nums
     if exp >= need:
         if fb:
             return "reverted", "노출 %d회 중 헛막기 %d회" % (exp, fb), nums
@@ -172,7 +217,7 @@ def judge_actions(root, at=None):
         since = count_since(a)
         verdict = {"action_id": a["action_id"], "period": [a.get("created_at"), at.isoformat(timespec="seconds")],
                    "exposures": nums["exposures"], "negatives": nums["negatives"],
-                   "false_blocks": nums["false_blocks"], "side": _side(root, a, rows, since),
+                   "false_blocks": nums["false_blocks"], "side": dict(_side(root, a, rows, since), **(nums.get("side") or {})),
                    "result": result, "reason": reason, "judged_at": now_iso()}
         trial = dict(a.get("trial") or {})
         trial.update({"exposures": nums["exposures"], "negatives": nums["negatives"]})

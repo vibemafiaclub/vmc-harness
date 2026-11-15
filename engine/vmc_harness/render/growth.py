@@ -21,7 +21,7 @@ from vmc_harness.core.jsonio import read_json
 
 LEARN_LAYERS = ("card", "rule", "gate", "structure")
 SOURCE_LABEL = {"explicit_request": "요청", "machine_fact": "코드에서 읽음", "learning": "대화에서 배움",
-                "finding": "되돌림에서", "cleansing": "정리"}
+                "finding": "되돌림에서", "cleansing": "정리", "diagnosis_auto": "진단 자동 반영"}
 
 
 # ---------------- 기간 ----------------
@@ -172,8 +172,8 @@ def acceptance(root, start, end):
         return None
     if not isinstance(hist, dict):
         return None
-    shown = sum(1 for h in hist.get("shown") or [] if isinstance(h, dict) and not h.get("ticket")
-                and _in(h.get("at"), start, end))  # 루프 티켓(자동 등록)은 사람이 고를 제안이 아니다
+    shown = sum(1 for h in hist.get("shown") or [] if isinstance(h, dict) and not h.get("ticket") and not h.get("auto")
+                and _in(h.get("at"), start, end))  # 루프 티켓(자동 등록)·자동 반영은 사람이 고를 제안이 아니다
     added = sum(1 for h in hist.get("accepted") or [] if isinstance(h, dict) and _in(h.get("at"), start, end))
     if not shown and not added:
         return None

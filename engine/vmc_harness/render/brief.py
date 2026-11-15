@@ -230,6 +230,11 @@ def proposals_view(root):
             continue
         text = ((p.get("display") or {}).get("rendered") or p.get("title") or "").splitlines()
         line = text[0] if text else ""
+        aid = (p.get("auto_applied") or {}).get("action_id")
+        if aid:  # 진단 자동 반영 — 시험 중인 동안만 보이고 [제외] = 되돌리기(사후 원클릭)
+            if (ledger.get_action(root, aid) or {}).get("status") in ("trial", "extended"):
+                out.append({"id": str(p["no"]), "text": "자동 반영(시험 중): " + line, "buttons": ["제외"]})
+            continue
         if p.get("ticket_id"):  # 루프 티켓으로 자동 등록 — 아직 루프가 손대기 전에만 보이고 [제외]로 취소
             c = ledger.get_candidate(root, p["ticket_id"]) or {}
             if c.get("status") != "open":

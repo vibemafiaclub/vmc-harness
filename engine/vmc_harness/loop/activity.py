@@ -39,8 +39,8 @@ def touch(root, at=None):
     data["last_prompt_at"] = at or now_iso()
     data.pop("start_requested_at", None)
     _save(root, data)
-    if is_running(root):
-        signal_stop(root, "human_prompt")
+    if is_running(root) and not (read_json(running_path(root), None) or {}).get("no_yield"):
+        signal_stop(root, "human_prompt")  # 진단 자동 반영 처리(no_yield — worktree만 쓴다)는 사람 지시에 양보하지 않는다
     return data
 
 

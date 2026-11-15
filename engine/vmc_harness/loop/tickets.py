@@ -387,6 +387,11 @@ def _record_direct(root, cand, branch, base, head, changed, wt):
                             "area": cand.get("area"), "baseline_excess": cand.get("baseline_excess")}
         hyp = "%s — 이 영역 %s 초과가 줄어든다" % (cand.get("summary"), cand.get("phase") or cand.get("cause"))
         target = {"predict": key}
+    elif cand.get("auto_apply") and cand.get("auto_basis"):
+        basis = dict(cand["auto_basis"])
+        hyp = "진단 제안 자동 반영 — %s" % cand.get("summary")
+        target = {"area": area}
+        extra["auto"] = dict(cand.get("auto_snapshot") or {})
     else:
         basis = {"type": "cleansing", "ref": cand["candidate_id"]}
         hyp = "진단 제안(구조 직접) — %s" % cand.get("summary")
@@ -523,8 +528,16 @@ def process(root, cand, deadline=None):
         from vmc_harness.loop import merge
         tests_only = all(detect.is_test_path(f) for f in changed) and merge.structure_unchanged(wt, main_sha, head)[0]
         weak = weakened(wt, main_sha, head, [f for f in changed if detect.is_test_path(f)])
-        if not tests_only and not weak and config.get("loop.structure_direct", root) \
-                and not any(candidates.is_write_path(root, f) for f in changed):
+        auto = bool(cand.get("auto_apply") and cand.get("auto_basis"))  # 진단 자동 반영(bootstrap.autoapply 검사 통과)
+        direct = auto or (not tests_only and config.get("loop.structure_direct", root))
+        if direct and not weak and not any(candidates.is_write_path(root, f) for f in changed):
+            if auto:  # 조이기만 — 삭제·훅 줄이기·하네스 상태·사람 지침 변경·변경 크기 초과면 반영하지 않고 제안으로
+                from vmc_harness.bootstrap import autoapply
+                bad = autoapply.diff_problems(root, wt, main_sha, head, changed)
+                if bad:
+                    keep_branch = True
+                    return dict(_propose(root, cand, branch, "자동 반영 검사 미통과: " + "; ".join(bad[:3]), verified),
+                                tokens=tokens)
             ok, why = repo_checks(root, wt, main_sha, head, changed)
             if not ok:
                 return _failed(root, cand, why, tokens)

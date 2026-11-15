@@ -189,6 +189,58 @@ def run(root, trigger="manual"):
     return {"ran": True, "reason": reason, "units": units}
 
 
+def run_tickets(root, cids, trigger="diagnose"):
+    """정해진 티켓만 지금 처리(진단 자동 반영 — 퇴근 판정 없이). 루프 실행 표시·원격 잠금·밤당 토큰 상한은 밤 루프와 같다.
+    사람 지시가 와도 양보하지 않는다(no_yield — 별도 worktree라 사람 작업 트리를 건드리지 않는다).
+    기록은 loop-runs.jsonl(auto_start·unit·auto_end — 밤 루프의 '오늘 밤 끝남' 판정에 섞이지 않게)."""
+    import datetime as _dt
+    import os
+    from vmc_harness.core import ledger
+    if not config.get("loop.enabled", root):
+        return {"ran": False, "reason": "disabled"}
+    if activity.is_running(root):
+        return {"ran": False, "reason": "running"}
+    ok, remote = _acquire(root)
+    if not ok:
+        return {"ran": False, "reason": "locked_elsewhere"}
+    activity.mark_running(root, {"pid": os.getpid(), "trigger": trigger, "no_yield": True})
+    activity.clear_stop(root)
+    hold = power.inhibit()
+    cap = config.get("loop.nightly_tokens", root)
+    log(root, "auto_start", trigger=trigger, candidates=list(cids))
+    reason, units = "done", 0
+    try:
+        for cid in cids:
+            if night_tokens(root) >= cap:
+                reason = "token_cap"
+                break
+            cand = ledger.get_candidate(root, cid)
+            if not cand or cand.get("status") not in (None, "open") or _tried_tonight(root, cid):
+                continue
+            activity.heartbeat(root)
+            deadline = now() + _dt.timedelta(seconds=config.get("loop.unit_timeout_s", root))
+            res = _process(root, cand, deadline)
+            units += 1
+            log(root, "unit", candidate_id=cid, kind=cand.get("kind"), outcome=res.get("outcome"), reason=res.get("reason"),
+                tokens=int(res.get("tokens") or 0), action_id=res.get("action_id"), grade=res.get("grade"), trigger=trigger)
+            if res.get("outcome") == "failed" and _auth_problem(res.get("reason")):
+                reason = "auth_failed"
+                break
+    except Exception as e:
+        reason = "error"
+        log(root, "error", error=str(e)[:300])
+    finally:
+        log(root, "auto_end", reason=reason, units=units, tokens=night_tokens(root))
+        power.release(hold)
+        activity.clear_running(root)
+        if remote is not None:
+            try:
+                remote.release(root)
+            except Exception:
+                pass
+    return {"ran": True, "reason": reason, "units": units}
+
+
 def _process(root, cand, deadline):
     if cand.get("kind") in tickets.KINDS:
         return tickets.process(root, cand, deadline=deadline)
