@@ -36,3 +36,13 @@ pdf_timeout_s = 120           # unit=s md=no spec=07
 risk_top_modules = 30         # unit=modules md=no spec=07 — 위험 지도에 그리는 모듈 수
 scenes_per_card = 3           # unit=scenes md=no spec=07 — 제안 상세 카드에 그리는 "이 장치가 있었다면" 대표 장면 수
 risk_table_rows = 10          # unit=modules md=no spec=07 — 본문 위험 표에 싣는 상위 모듈 수(전체 지도는 부록)
+
+[autoapply]
+enabled = true                # unit=bool md=no spec=07 — 진단 제안 중 기계 검사를 전부 통과한 것을 사람 [추가] 없이 반영(trial). 프로파일 gxp는 끈다(변경관리)
+kinds = ["gate", "rule", "protected", "structure"]  # unit=kinds md=no spec=07 — 자동 반영할 제안 종류
+gate_max_problem_changes = 0  # unit=changes md=no spec=07 measured=no — gate 제안 자동 반영 조건: 백테스트 "문제가 된 변경"이 이 이하(2026-11-16 최수민 "문제 변경 0")
+same_target_jaccard = 0.6     # unit=ratio md=no spec=07 measured=no — 같은 종류 제안의 대상(파일·경로 glob·백테스트 장면) 겹침이 이 이상이면 같은 대상으로 묶고 새로 내지 않는다
+human_rules_chars = 12000     # unit=chars md=no spec=07 — 진단 참고 자료 human_rules.md(레포 지침 사람 영역·브레인 카드) 길이 상한
+
+[profile.gxp]
+autoapply.enabled = false     # spec=07 GMP 변경관리 — 루프가 꺼진 것과 같은 이유로 자동 반영도 끈다

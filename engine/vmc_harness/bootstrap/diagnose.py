@@ -30,6 +30,7 @@ from vmc_harness.core.mask import mask
 from vmc_harness.core.project import local_dir
 
 KINDS = ("gate", "protected", "structure", "rule")
+KERNEL_GATE_TYPES = ("db_direct", "test_modify")  # 커널 안전 게이트가 이미 막는 조건
 KIND_ALIASES = {"block": "gate"}  # 막기 = gate
 REQUIRED = ("title", "kind", "evidence", "blocks", "scope", "cost")
 _HAS_NUM_OR_QUOTE = re.compile(r"(\d|[\"“”'‘’「」『』])")
@@ -178,6 +179,11 @@ def prepare_inputs(root, sessions=None, analysis_dir=None, measured=None):
     (d / "user_setup_docs.md").write_text(us["docs_text"] or "(사용자 단위 지침 문서 없음)", encoding="utf-8")
     if measured:
         write_json(d / "measured.json", measured)
+    try:
+        from vmc_harness.bootstrap import autoapply
+        (d / "human_rules.md").write_text(autoapply.human_rules_text(root), encoding="utf-8")
+    except Exception as e:  # 편의 자료 — 못 모아도 진단은 돈다(충돌 칸을 못 채우면 자동 반영에서 빠질 뿐)
+        (d / "human_rules.md").write_text("(사람 규칙을 모으지 못함: %s)" % str(e)[:200], encoding="utf-8")
     return {"dir": d, "commits": int(n.strip()) if rc == 0 and n.strip().isdigit() else 0,
             "sessions": sum(1 for s in sess if s.get("kind") == "main"), "analysis_dir": analysis_dir,
             "user_setup": us["summary"], "measured": bool(measured)}
@@ -200,6 +206,8 @@ def build_prompt(root, inputs, shown_titles, user_shown_titles=()):
         "- git 변경 요약: %s/git_log.txt" % d,
         "- 이 PC의 사용자 단위 설정(프로젝트 밖 ~/.claude·~/.codex — 스킬·플러그인·훅 이름과 설명, 지난 AI 대화에서 불린 수·훅이 걸린 시간): %s/user_setup.json, "
         "지침 원문(사용자 단위 CLAUDE.md·AGENTS.md·스킬 설명): %s/user_setup_docs.md" % (d, d),
+        "- 사람이 정한 규칙: %s/human_rules.md(이 레포 AGENTS.md·CLAUDE.md의 사람 영역과 그 문서가 불러오는 문서, 브레인 카드), "
+        "위 사용자 단위 지침 원문, 레포의 원칙 문서" % d,
     ]
     if inputs.get("measured"):
         refs.append("- 하네스 설치 이후 실측(넣은 장치·판정·노출, 작업 예측 대비 실측, 장치별 발동·막음·헛막기·시간, "
@@ -253,7 +261,13 @@ def build_prompt(root, inputs, shown_titles, user_shown_titles=()):
         '   "condition": {백테스트 조건 — gate면 필수},',
         '   "protected_globs": ["보호할 경로 glob" — protected면 필수],',
         '   "targets": ["바꾸게 될 파일" — structure면],',
-        '   "backtest": {"would_block": 숫자, "problem_changes": 숫자} — 돌려 봤으면}],',
+        '   "backtest": {"would_block": 숫자, "problem_changes": 숫자} — 돌려 봤으면,',
+        '   "human_rule_conflict": {"conflicts": true | false, "with": "부딪히는 사람 규칙의 위치(파일·카드 id) — 없으면 빈 문자열",'
+        ' "quote": "그 규칙 원문 일부"} — 모든 제안에 필수. 이 제안이 사람이 정한 규칙과 반대 방향이면 true,',
+        '   "direction": "tighten | loosen" — 모든 제안에 필수. 안전 장치(게이트·보호 영역·훅·확인·승인 절차)를 더하거나 좁히면 tighten,'
+        ' 풀거나 줄이거나 건너뛰게 하면 loosen,',
+        '   "signal": {"type": "command", "regex": "..."} | {"type": "path_write", "globs": ["..."]} | {"type": "hook_error", "label": "훅 이름"}'
+        ' — 이 제안이 줄이려는 문제가 AI 대화 기록(tool_calls.jsonl 명령·쓰기 경로, 훅 오류)에 나타나는 모양. rule·structure면 필수(하네스가 반영 전후로 센다)}],',
         ' "user_level": [{"title": "무엇을 바꾸면 좋은가 한 줄",',
         '   "setting": "대상 스킬·플러그인·훅·지침 파일 이름",',
         '   "issue": "과한 검증 | 의도와 다른 지침 | 느린 게이트 | 기타",',
@@ -475,8 +489,7 @@ def run(root, sessions=None, analysis_dir=None, progress=None, use_llm=True, tri
         ok = ok[:top_k]
     say("제안 %d개 — 백테스트 다시 실행(결정적)" % len(ok))
     sess = read_sessions_index(root)
-    for i, p in enumerate(ok, 1):
-        p["no"] = i
+    for p in ok:
         p["model_backtest"] = p.pop("backtest", None)
         cond = p.get("condition") if p["kind"] == "gate" else None
         if p["kind"] == "protected":
@@ -486,6 +499,13 @@ def run(root, sessions=None, analysis_dir=None, progress=None, use_llm=True, tri
                 p["backtest"] = backtest.run(root, cond, sess)
             except Exception as e:  # 편의 경로 — 조건 오류는 표시만
                 p["backtest"] = {"error": str(e)}
+    # 같은 대상(파일·명령·게이트 조건·백테스트 장면)으로 이미 낸·반영한·제외한 제안은 새로 내지 않고 앞 것에 묶는다
+    from vmc_harness.bootstrap import autoapply
+    ok, merged = autoapply.dedupe(root, ok, hist)
+    if merged:
+        result["checks"]["merged"] = merged
+    for i, p in enumerate(ok, 1):
+        p["no"] = i
         p["display"] = render_proposal(root, p)
     result["proposals"] = ok
     result["summary"] = (data or {}).get("summary") or ""
@@ -499,10 +519,13 @@ def run(root, sessions=None, analysis_dir=None, progress=None, use_llm=True, tri
     # 루프가 할 수 있는 제안(structure)은 [추가] 없이 루프 티켓으로 — [제외]로 취소(사후 원클릭, 승인 게이트 아님)
     util.optional_call([("vmc_harness.loop.tickets", "sync_diagnosis")], str(root), result)
     # 루프 티켓은 사람이 고른 것이 아니라 수용률(보인 제안 중 [추가])에서 뺀다 — ticket 표시
-    hist.setdefault("shown", []).extend({"title": p["title"], "at": result["generated_at"], "ticket": bool(p.get("ticket_id"))}
-                                        for p in ok)
+    hist.setdefault("shown", []).extend({"title": p["title"], "at": result["generated_at"], "ticket": bool(p.get("ticket_id")),
+                                         "kind": p["kind"], "sig": autoapply.signature(p)} for p in ok)
     hist.setdefault("user_shown", []).extend({"title": u["title"], "at": result["generated_at"]} for u in result["user_level"])
     write_json(history_path(root), hist)
+    # 기계 검사를 전부 통과한 제안은 사람 [추가] 없이 반영(trial) — 정기 재진단은 이미 백그라운드라 그 자리에서,
+    # 사람이 돌린 진단은 structure 처리(worktree·모델 실행)를 분리 실행으로
+    util.optional_call([("vmc_harness.bootstrap.autoapply", "after_diagnosis")], str(root), result, inline=(trigger == "weekly"))
     return result
 
 
@@ -527,20 +550,29 @@ def load(root):
 
 # ---------------------------------------------------------------- [추가]·[제외]
 
-def _source(scope):
-    return {"session": None, "date": now_iso()[:10], "area": str(scope or "")[:120], "via": "diagnose accept"}
+def _source(scope, auto=False):
+    return {"session": None, "date": now_iso()[:10], "area": str(scope or "")[:120],
+            "via": "diagnose auto" if auto else "diagnose accept"}
 
 
-def _add_protected(root, p, quote):
+def _basis(p, quote, auto_basis):
+    """사람 [추가] = 명시 요청(원문 = 제안 제목). 자동 반영이면 그 근거(diagnosis_auto — 기계 검사 결과 포함)에 출처만 더한다."""
+    if auto_basis:
+        return dict(auto_basis, source=_source(p.get("scope"), auto=True))
+    return {"type": "explicit_request", "quote": quote, "source": _source(p.get("scope"))}
+
+
+def _add_protected(root, p, quote, auto_basis=None):
     pf = paths.harness_dir(root) / "protected.json"
     data = read_json(pf, None) or {"paths": []}
     items = data.setdefault("paths", []) if isinstance(data, dict) else data
     have = {(x if isinstance(x, str) else x.get("glob")) for x in items}
     kinds = {c["glob"]: c["category"] for c in _candidates(root)}
     kind_map = {"approval": "approval_flow", "generated_source": "generated", "seed": "db_write"}
-    a = ledger.create_action(root, {"type": "explicit_request", "quote": quote, "ref": "diagnose"}, "gate",
+    b = _basis(p, quote, auto_basis)
+    a = ledger.create_action(root, dict(b, ref=b.get("ref") or "diagnose"), "gate",
                              "보호 영역 '%s'에 닿는 변경이 사람 승인 없이 들어가지 않는다" % ", ".join(p["protected_globs"][:3]),
-                             human_requested=True, human_criterion=2, calls_human=True,
+                             human_requested=not auto_basis, human_criterion=2, calls_human=True,
                              target={"protected": sorted(p["protected_globs"])})
     added = []
     for g in p["protected_globs"]:
@@ -548,7 +580,7 @@ def _add_protected(root, p, quote):
             continue
         k = kinds.get(g)
         items.append({"glob": g, "kind": kind_map.get(k, k), "action_id": a["action_id"], "added_at": now_iso(),
-                      "basis": {"type": "explicit_request", "quote": quote, "source": _source(p.get("scope"))}})
+                      "basis": {k2: v for k2, v in b.items() if k2 != "checks"}})
         added.append(g)
     write_json(pf, data if isinstance(data, dict) else {"paths": items})
     return {"kind": "protected", "added": added, "action_id": a["action_id"]}
@@ -628,18 +660,20 @@ def _trigger(cond):
     return {"events": ["PreToolUse"]}
 
 
-def _create_gate(root, p, quote):
+def _create_gate(root, p, quote, auto_basis=None):
     """게이트 생성은 gates 영역에 위임: 조건이 백테스트 형식이면 본체를 조건 그대로 만들어 generated.create,
-    아니면 generate.from_request(LLM이 본체를 쓴다). 범위는 제안 문구 그대로."""
+    아니면 generate.from_request(LLM이 본체를 쓴다 — 사람 [추가]만). 범위는 제안 문구 그대로."""
     cond = p["condition"]
     src = _source(p.get("scope"))
-    basis = {"type": "explicit_request", "quote": quote, "source": src}
+    basis = _basis(p, quote, auto_basis)
     extra = {}
     if cond["type"] == "write_outside":
         d = _set_patch_dir(root, cond)
         if d:
             extra["db_patch_dir"] = d
-    if cond["type"] in ("db_direct", "test_modify"):
+    if cond["type"] in KERNEL_GATE_TYPES:
+        if auto_basis:
+            return dict(extra, kind="gate", error="커널 안전 게이트가 이미 막는 조건 — 자동 반영할 것 없음")
         # 커널 안전 게이트(DB 직접 접속 차단·검증물 변조 금지)가 이미 막는다 — 요청 기록만(같은 걸 두 번 만들지 않는다)
         a = ledger.create_action(root, {"type": "explicit_request", "quote": quote, "ref": "diagnose"}, "gate",
                                  p["blocks"], human_requested=True, target={"kernel_gate": cond["type"]})
@@ -654,6 +688,8 @@ def _create_gate(root, p, quote):
                         cost_line=r.get("cost_line"), **_waiting(root, p))
         if st == "error":
             return dict(extra, kind="gate", error=r)
+    if auto_basis:  # LLM이 본체를 쓰는 길은 사람 [추가]만 — 자동 반영은 조건 그대로 만든 본체만
+        return dict(extra, kind="gate", error="조건으로 게이트 본체를 만들 수 없음 — 자동 반영 안 함")
     st, r = util.optional_call([("vmc_harness.gates.generate", "from_request")], str(root), quote, src)
     if st == "ok" and r:
         return dict(extra, kind="gate", gate_id=r["gate_id"], action_id=r["action_id"], cost_line=r.get("cost_line"))
@@ -666,17 +702,43 @@ def _create_gate(root, p, quote):
     return dict(extra, kind="gate", error="게이트 생성 함수 없음" if st != "error" else r)
 
 
-def _add_rule(root, p, quote):
-    """명시 요청 규칙 — ledger.selfcheck.add_rule 하나로(gates.rules 형식, 조치 target {"rule_id"} — revert가 찾는다)."""
+def _add_rule(root, p, quote, auto_basis=None):
+    """명시 요청 규칙 — ledger.selfcheck.add_rule 하나로(gates.rules 형식, 조치 target {"rule_id"} — revert가 찾는다).
+    자동 반영은 _add_auto_rule(근거 타입만 다르다)."""
     from vmc_harness.ledger import selfcheck
     src = _source(p.get("scope"))
     err = rule_text_error(p.get("rule_text"))
     if err:  # 옛 진단 결과(rule_text 칸 없음)를 [추가]하는 경우 — 할 일 제목을 규칙으로 넣지 않는다(B3)
         return {"kind": "rule", "error": err + " — `vmc-harness diagnose`로 다시 진단하면 규칙 문장으로 제안해요"}
+    if auto_basis:
+        return dict(_add_auto_rule(root, p, quote, auto_basis), **_waiting(root, p))
     rid, a = selfcheck.add_rule(root, quote, src, action_basis_ref="diagnose",
                                 why_not_higher=(p.get("why_not_higher") or "기계로 판정할 수 없는 사실이라 규칙으로 둔다")[:200],
                                 hypothesis=p.get("blocks"), rule_text=p["rule_text"].strip(), requires=p.get("requires"))
     return dict({"kind": "rule", "rule_id": rid, "action_id": a["action_id"]}, **_waiting(root, p))
+
+
+def _add_auto_rule(root, p, quote, auto_basis):
+    """진단 자동 반영 규칙 — selfcheck.add_rule과 같은 틀(gates.rules.add_explicit + 조치 target {"rule_id"})이고
+    근거만 diagnosis_auto·human_requested 아님(판정이 노출 부족이면 원복한다)."""
+    from vmc_harness.gates import rules as grules
+    b = _basis(p, quote, auto_basis)
+    why = (p.get("why_not_higher") or "기계로 판정할 수 없는 사실이라 규칙으로 둔다")[:200]
+    ledger.check_action(root, b, "rule", why)
+    rid = grules.add_explicit(root, quote, b["source"], rule_text=p["rule_text"].strip(), requires=p.get("requires"),
+                              basis={k: v for k, v in b.items() if k not in ("checks", "quote", "source")})["id"]
+    a = ledger.create_action(root, b, "rule", p.get("blocks") or "이 규칙으로 같은 문제가 줄어든다", why_not_higher=why,
+                             human_requested=False, target={"rule_id": rid}, extra={"title": quote[:80]})
+    data = grules.load(root)
+    for r in data["rules"]:
+        if r.get("id") == rid:
+            r["action_id"] = a["action_id"]
+    grules.save(root, data)
+    try:
+        grules.render(root)
+    except Exception:
+        pass
+    return {"kind": "rule", "rule_id": rid, "action_id": a["action_id"]}
 
 
 def _waiting(root, p):
@@ -688,6 +750,19 @@ def _waiting(root, p):
         requires.enable_ready(root)
         return {}
     return {"waiting": [requires.describe(x) for x in left]}
+
+
+def apply_proposal(root, p, auto_basis=None):
+    """gate·rule·protected 제안 하나를 장치로. auto_basis 없음 = 사람 [추가](명시 요청, 원문 = 제목),
+    있음 = 진단 자동 반영(bootstrap.autoapply가 기계 검사를 전부 통과시킨 것만 부른다). 결과 dict."""
+    quote = p["title"]
+    if p["kind"] == "protected":
+        return _add_protected(root, p, quote, auto_basis)
+    if p["kind"] == "gate":
+        return _create_gate(root, p, quote, auto_basis)
+    if p["kind"] == "rule":
+        return _add_rule(root, p, quote, auto_basis)
+    raise ValueError("장치로 바로 만드는 종류가 아님: %s" % p.get("kind"))
 
 
 def accept(root, numbers):
@@ -709,14 +784,13 @@ def accept(root, numbers):
         if p.get("ticket_id"):
             out.append({"no": n, "skipped": "이미 루프 티켓으로 등록됨", "ticket_id": p["ticket_id"]})
             continue
+        if p.get("auto_applied"):
+            out.append({"no": n, "skipped": "이미 자동 반영됨", "action_id": p["auto_applied"].get("action_id")})
+            continue
         quote = p["title"]
         try:
-            if p["kind"] == "protected":
-                r = _add_protected(root, p, quote)
-            elif p["kind"] == "gate":
-                r = _create_gate(root, p, quote)
-            elif p["kind"] == "rule":
-                r = _add_rule(root, p, quote)
+            if p["kind"] in ("protected", "gate", "rule"):
+                r = apply_proposal(root, p)
             else:  # structure — 루프 티켓(06 §티켓). 보통은 진단 때 자동 등록돼 여기 오지 않는다
                 from vmc_harness.loop import tickets
                 c = tickets.register_ticket(root, p, human_requested=True)
@@ -751,6 +825,10 @@ def exclude(root, numbers):
         p["excluded"] = now_iso()
         hist.setdefault("excluded", []).append(p["title"])
         r = {"no": n, "finding_id": f["finding_id"]}
+        aid = (p.get("auto_applied") or {}).get("action_id")
+        if aid:  # 자동 반영한 장치 — [제외] = 사람의 되돌리기(finding revert + 원복)
+            from vmc_harness.ledger import revert
+            r["action_status"] = revert.revert_action(root, aid, "패널 [제외]", by_human=True).get("status")
         if p.get("ticket_id"):  # 자동 등록된 루프 티켓 취소(준비된 브랜치·조치도 버린다)
             from vmc_harness.loop import tickets
             c = tickets.cancel_ticket(root, p["ticket_id"])

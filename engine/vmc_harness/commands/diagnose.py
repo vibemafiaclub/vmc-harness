@@ -7,6 +7,7 @@
     diagnose tool-test       (진단 모델용 도구) 테스트를 기준선 방식으로 돌려 새 실패만 요약
     diagnose rebaseline      기준선 다시 재기 — 옛 기준선(Codex 자동 승인 심사 요청이 사람 지시로 섞임) 정정 + latest + 테스트 실패 기준선
     diagnose weekly          정기 재진단 본체(세션 시작 훅이 그 기간(기본 하루) 첫 세션에 백그라운드로 부른다) — 세션 다시 읽기·설치 이후 실측·리포트·알림
+    diagnose autoapply       진단 자동 반영(검사 통과분 반영 + 줄 선 structure 티켓 처리·머지). --dry-run이면 쓰기 없이 표만
 """
 
 import json
@@ -18,7 +19,7 @@ from vmc_harness.core import paths
 def register(sub):
     p = sub.add_parser("diagnose", help="시니어식 진단 + 진단 리포트, 제안 [추가]·[제외]")
     p.add_argument("action", nargs="?", default="run",
-                   choices=("run", "accept", "exclude", "report", "tool-test", "show", "weekly", "rebaseline"))
+                   choices=("run", "accept", "exclude", "report", "tool-test", "show", "weekly", "rebaseline", "autoapply"))
     p.add_argument("numbers", nargs="*", help="accept·exclude 번호(예: 1 3 또는 1,3)")
     p.add_argument("--sessions-dir")
     p.add_argument("--analysis-dir")
@@ -26,6 +27,7 @@ def register(sub):
     p.add_argument("--no-open", action="store_true")
     p.add_argument("--report-out")
     p.add_argument("--json", action="store_true")
+    p.add_argument("--dry-run", action="store_true", help="autoapply: 아무것도 쓰지 않고 무엇이 반영되고 왜 빠지는지만")
     p.set_defaults(func=run)
 
 
@@ -65,6 +67,18 @@ def run(args):
         res = weekly.refresh_baselines(root, sessions if info.get("main") else None, info)
         print(json.dumps(res, ensure_ascii=False) if args.json else _rebaseline_line(res))
         return 0
+    if args.action == "autoapply":
+        from vmc_harness.bootstrap import autoapply
+        if args.dry_run:
+            res = autoapply.dry_run(root)
+            print(json.dumps(res, ensure_ascii=False, indent=2) if args.json else _dry_run_table(res))
+            return 0
+        res = autoapply.apply(root, structure=True)
+        print(json.dumps(res, ensure_ascii=False, indent=2) if args.json else "\n".join(
+            "%s번 %s — %s%s" % (r.get("no"), r.get("title"), r.get("result"),
+                               (": " + "; ".join(r.get("reasons") or [])) if r.get("reasons") else "") for r in res["rows"])
+            or "반영할 제안 없음")
+        return 0
     if args.action == "show":
         print(json.dumps(diagnose.load(root) or {}, ensure_ascii=False, indent=2))
         return 0
@@ -89,6 +103,23 @@ def run(args):
     print("리포트: %s" % rep["html"])
     print("PDF: %s" % (rep.get("pdf") or rep.get("pdf_error")))
     return 0
+
+
+def _dry_run_table(res):
+    out = ["| 번호 | 종류 | 제안 | 자동 반영 | 빠지는 이유 |", "|---|---|---|---|---|"]
+    for r in res["current"]:
+        why = list(r.get("reasons") or [])
+        if r.get("merged"):
+            why.append("같은 대상(%s) — '%s'에 묶음" % (r["merged"]["by"], r["merged"]["into"]))
+        out.append("| %s | %s | %s | %s | %s |" % (r.get("no"), r.get("kind"), r.get("title"),
+                                                 "대상" if r.get("eligible") and not r.get("merged") else "제외",
+                                                 "; ".join(why) or "-"))
+    out += ["", "진단 이력(제목·티켓 대상만 남아 있음 — 충돌·방향·신호 칸은 옛 형식이라 없음):", "",
+            "| 날짜 | 종류 | 제안 | 금지 분야 | 푸는 말 | 같은 대상 |", "|---|---|---|---|---|---|"]
+    for h in res["history"]:
+        out.append("| %s | %s | %s | %s | %s | %s |" % (h["at"], h["kind"], h["title"], ", ".join(h["domain"]) or "-",
+                                                     h.get("loosen") or "-", h.get("same_as") or "-"))
+    return "\n".join(out)
 
 
 def _waiting_line(r):
