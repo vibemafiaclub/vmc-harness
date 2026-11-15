@@ -39,6 +39,8 @@ class AutoApplyCase(LoopTestCase):
         self.write("calc.py", CALC)
         self.write("AGENTS.md", "# 사람 지침\n\n- 이 레포 세션에서 다른 레포도 고쳐 커밋까지 끝낸다\n")
         self.write(".gitignore", ".harness/cache/\n")
+        cfg = read_json(self.root / ".harness/config.json") or {}
+        write_json(self.root / ".harness/config.json", dict(cfg, profile="solo"))  # 자동 반영 기본 켜짐은 solo만
         self.base = self.commit_old("init")
         t0 = (now() - _dt.timedelta(days=3)).isoformat(timespec="seconds")
         self.sessions([sess("S%d" % i, t0, ["npx tsc --noEmit -p apps/www"] if i % 2 else ["ls"], hook_errors=1)
@@ -150,6 +152,13 @@ class ChecksTest(AutoApplyCase):
         self.assertTrue(res["current"][0]["eligible"])
         self.assertEqual(diagnose.diagnosis_path(self.root).read_text(encoding="utf-8"), before)
         self.assertEqual(ledger.list_actions(self.root), [])
+
+    def test_standard_profile_is_off_by_default(self):
+        cfg = read_json(self.root / ".harness/config.json")
+        write_json(self.root / ".harness/config.json", dict(cfg, profile="standard"))
+        self.diagnosis([P("x 쓰기 막기", "gate", condition={"type": "path_write", "globs": ["**/*.x"]},
+                          backtest={"would_block": 1, "problem_changes": 1, "scenes": []})])
+        self.assertEqual(autoapply.after_diagnosis(str(self.root), diagnose.load(self.root)), {"enabled": False})
 
     def test_gxp_profile_turns_it_off(self):
         cfg = read_json(self.root / ".harness/config.json")
