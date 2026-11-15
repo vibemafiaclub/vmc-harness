@@ -187,6 +187,7 @@ def parse(path, windows=None):
         ends = [e for e in events if e >= start and (nxt is None or e < nxt)]
         if ends:
             turns.append((start, max(ends)))
+    s.prompt_times = [iso(t) for t, _ in prompts]
     if windows is not None:
         # 작업 구간만: 구간 안 사람 메시지·도구 호출, 턴은 겹친 부분(선언이 턴 중간이어도 그 뒤는 센다)
         prompts = [p for p in prompts if in_windows(p[0], windows)]

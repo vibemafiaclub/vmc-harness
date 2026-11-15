@@ -1,4 +1,4 @@
-"""자가 점검 — 세션 종료 시 비동기 1회 (spec 04 §자가 점검, 01 P2·P3·P6).
+"""자가 점검 — 세션 종료 때마다 비동기, 같은 세션은 지난 점검 뒤 새 구간만 (spec 04 §자가 점검, 01 P2·P3·P6).
 
 - 세션 기록(sessions.parse)으로 사람 개입 수·도구 호출 수를 센다 → events(session_selfcheck) → 일일 집계
 - 정정 발화에서 학습 후보를 뽑는다(core.llm — 목표·참고·제약·출력 형식만: "사람이 다시 말하게 만든 원인을 찾아라")
@@ -14,8 +14,10 @@
 """
 
 import json
+import os
 import re
 import time
+from datetime import timedelta
 
 from vmc_harness.core import config, events
 from vmc_harness.core import ledger as core_ledger
@@ -39,22 +41,78 @@ conflicts는 사람의 정정·재지시가 하네스 지침이 시킨 방향과
 
 
 # ---- 상태 ----
+# selfcheck-done.json = {"sessions": [점검한 적 있는 세션 키], "cursors": {키: {"at": 마지막으로 본 기록 시각,
+#   "mtime": 그때 파일 수정 시각, "runs": 점검 횟수}}}. 같은 세션이 이어지면(--resume — 턴마다 SessionStart/SessionEnd)
+# 커서 뒤 새 구간만 다시 본다. 커서 없이 "sessions"에만 있는 키 = 0.1.11 이하가 첫 턴만 본 세션 — 처음 만날 때 지금까지를
+# 본 것으로 두고 그 뒤부터 센다(옛 구간을 다시 LLM에 넘기지 않는다).
 
 def _done_file(root):
     return local_dir(root) / "selfcheck-done.json"
 
 
+def _state(root):
+    return read_json(_done_file(root), {}) or {}
+
+
 def _is_done(root, key):
-    return key in (read_json(_done_file(root), {}) or {}).get("sessions", [])
+    """한 번이라도 점검한 세션인가(init이 지난 세션을 두 번 해석하지 않게)."""
+    return key in _state(root).get("sessions", [])
 
 
-def _mark_done(root, key):
-    st = read_json(_done_file(root), {}) or {}
+def _cursor(root, key):
+    return (_state(root).get("cursors") or {}).get(key)
+
+
+def _mark_done(root, key, at=None, mtime=None):
+    st = _state(root)
     s = st.get("sessions", [])
     if key not in s:
         s.append(key)
-    st["sessions"] = s[-2000:]
+    keep = config.get("selfcheck.done_keep", root)
+    st["sessions"] = s[-keep:]
+    if at:
+        cur = st.get("cursors") or {}
+        old = cur.pop(key, None) or {}
+        cur[key] = {"at": at, "mtime": mtime, "runs": int(old.get("runs") or 0) + 1}
+        st["cursors"] = dict(list(cur.items())[-keep:])
     write_json(_done_file(root), st)
+
+
+def _lock(root, key):
+    """같은 세션을 두 프로세스가 동시에 점검하지 않게(SessionEnd 분리 실행·세션 시작 밀린 점검). 잡으면 경로, 못 잡으면 None.
+    selfcheck.timeout_s의 두 배보다 오래된 잠금은 죽은 것으로 보고 넘겨받는다."""
+    d = local_dir(root) / "selfcheck-locks"
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / ("%s.lock" % re.sub(r"[^A-Za-z0-9_.-]", "_", key)[-120:])
+    for _ in range(2):
+        try:
+            fd = os.open(str(p), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+            return p
+        except FileExistsError:
+            try:
+                if time.time() - p.stat().st_mtime < 2 * config.get("selfcheck.timeout_s", root):
+                    return None
+                p.unlink()
+            except OSError:
+                return None
+        except OSError:
+            return None
+    return None
+
+
+def _unlock(p):
+    try:
+        p.unlink()
+    except OSError:
+        pass
+
+
+def _mtime(path):
+    try:
+        return os.stat(str(path)).st_mtime
+    except OSError:
+        return None
 
 
 # ---- LLM 출력 검사 ----
@@ -109,6 +167,7 @@ def validate(out, prompts):
         corrections = int((out or {}).get("corrections") or 0)
     except (TypeError, ValueError):
         corrections = 0
+    corrections = max(0, min(corrections, len(prompts)))  # 넘긴 발화 수를 넘을 수 없다(기계 검사)
     return corrections, learnings, explicit
 
 
@@ -332,24 +391,86 @@ def extract(root, prompts, timeout=None, guides=None):
     return _parse_json(res.get("text")), res
 
 
+def _parse(path, agent, cursor_at):
+    from vmc_harness import sessions
+    from vmc_harness.core.clock import parse_iso
+    wins = None
+    if cursor_at:
+        c = parse_iso(cursor_at)
+        if c is not None:
+            wins = [(c + timedelta(microseconds=1), None)]
+    return sessions.parse(path, agent, windows=wins) if wins else sessions.parse(path, agent)
+
+
+def _after(at, cursor_at):
+    """기록 시각 at이 커서보다 뒤인가(커서 없으면 늘 True). 파서가 구간을 무시해도(옛 파서·테스트 대역) 두 번 세지 않게."""
+    if not cursor_at:
+        return True
+    from vmc_harness.core.clock import parse_iso
+    a, c = parse_iso(at) if at else None, parse_iso(cursor_at)
+    if c is None:
+        return True
+    return a is not None and a > c
+
+
+def _later(a, b):
+    from vmc_harness.core.clock import parse_iso
+    if not a or not b:
+        return a or b
+    da, db = parse_iso(a), parse_iso(b)
+    if da is None or db is None:
+        return a if da is not None else b
+    return a if da >= db else b
+
+
 def run_session(root, path, agent, session_id=None, use_llm=True):
-    """세션 1건 점검. 같은 세션은 한 번만."""
+    """세션 점검. 같은 세션은 지난 점검 커서 뒤 새 구간만 본다 — 이어 쓴 세션(--resume, 턴마다 SessionEnd)은 턴마다
+    새 사람 발화만 세고 그것만 LLM에 넘긴다. 이미 본 구간은 다시 세지도, 다시 넘기지도 않는다."""
+    from pathlib import Path
+    key0 = session_id or Path(str(path)).stem
+    lock = _lock(root, key0)
+    if lock is None:
+        return {"skipped": "다른 점검이 돌고 있음", "session_id": key0}
     try:
-        from vmc_harness import sessions
-        s = sessions.parse(path, agent)
+        return _run_session(root, path, agent, session_id, use_llm, key0)
+    finally:
+        _unlock(lock)
+
+
+def _run_session(root, path, agent, session_id, use_llm, key0):
+    cur = _cursor(root, key0)
+    try:
+        s = _parse(path, agent, (cur or {}).get("at"))
     except (ImportError, AttributeError, OSError) as e:
         return {"skipped": "세션 파서 없음/실패: %s" % str(e)[:100]}
     key = session_id or s.session_id or str(path)
-    if _is_done(root, key):
-        return {"skipped": "이미 점검함", "session_id": key}
+    if key != key0:
+        cur = _cursor(root, key)
+        if cur:
+            s = _parse(path, agent, cur.get("at"))
+    cursor_at = (cur or {}).get("at")
+    mtime = _mtime(path)
+    if not cur and _is_done(root, key):  # 0.1.11 이하가 첫 턴만 본 세션 — 지금까지를 본 것으로, 다음 턴부터 센다
+        _mark_done(root, key, s.ended_at or now_iso(), mtime)
+        return {"skipped": "옛 점검 기록 — 다음 턴부터 이어 본다", "session_id": key}
     t0 = time.time()
-    prompts = [mask(p.get("text") or "") for p in (s.human_prompts or [])][-config.get("selfcheck.max_prompts", root):]
+    raw = [p for p in (s.human_prompts or []) if _after(p.get("at"), cursor_at)]
+    tools = [x for x in (s.tool_calls or []) if _after(x.get("at"), cursor_at)]
+    new_at = _later(s.ended_at, cursor_at)
+    if cur and not raw and not tools:
+        if new_at and new_at != cursor_at:
+            st = _state(root)
+            st.setdefault("cursors", {})[key] = dict(cur, at=new_at, mtime=mtime)
+            write_json(_done_file(root), st)
+        return {"skipped": "새 구간 없음", "session_id": key}
+    prompts = [mask(p.get("text") or "") for p in raw][-config.get("selfcheck.max_prompts", root):]
     prompts = [p[:config.get("selfcheck.prompt_chars", root)] for p in prompts]
-    result = {"session_id": key, "measured": bool(s.measured), "human_turns": s.human_turns,
-              "tool_calls": len(s.tool_calls or []), "learnings": [], "explicit": [], "corrections": 0,
-              "conflicts": []}
+    result = {"session_id": key, "measured": bool(s.measured), "human_turns": len(raw),
+              "tool_calls": len(tools), "learnings": [], "explicit": [], "corrections": 0,
+              "conflicts": [], "continued": bool(cur)}
     tokens = 0
-    if use_llm and prompts:
+    worth = sum(len(p.strip()) for p in prompts) >= config.get("selfcheck.min_llm_chars", root)
+    if use_llm and prompts and worth:
         try:
             guides = session_guides(root, key)
         except Exception:  # 편의 장치 — 원복 후보 재료가 없어도 자가 점검은 돈다
@@ -375,34 +496,43 @@ def run_session(root, path, agent, session_id=None, use_llm=True):
                     result["learnings"].append({"rejected": str(e)})
             if guides:
                 result["conflicts"] = apply_conflicts(root, validate_conflicts(out, prompts, guides), guides, key)
+    # continued=True = 같은 세션의 이어진 구간(집계는 세션 수를 다시 세지 않고 숫자만 더한다 — ledger/metrics.py)
     events.log(root, "session_selfcheck", session_id=key, agent=agent, measured=bool(s.measured),
-               human_turns=s.human_turns, tool_calls=len(s.tool_calls or []), tokens=s.tokens,
-               agent_sec=s.agent_sec, corrections=result["corrections"])
+               human_turns=len(raw), tool_calls=len(tools), tokens=s.tokens,
+               agent_sec=s.agent_sec, corrections=result["corrections"], continued=bool(cur),
+               seq=int((cur or {}).get("runs") or 0) + 1)
     events.log(root, "harness_overhead", what="selfcheck", sec=round(time.time() - t0, 3), tokens=tokens,
                session_id=key)
-    _mark_done(root, key)
+    _mark_done(root, key, new_at or now_iso(), mtime)
     return result
 
 
 def pending(root, exclude_session=None):
-    """SessionEnd가 없었던(또는 실패한) 지난 세션 — 기록이 selfcheck.idle_min 이상 멈춘 것만."""
+    """SessionEnd가 없었던(또는 실패한) 지난 세션, 또는 지난 점검 뒤 기록이 더 쌓인 세션 —
+    기록이 selfcheck.idle_min 이상 멈춘 것만."""
     try:
         from vmc_harness import sessions
         found = sessions.find(root, limit=config.get("selfcheck.pending_sessions", root) * 4)
     except (ImportError, AttributeError):
         return []
     idle = config.get("selfcheck.idle_min", root) * 60
-    done = (read_json(_done_file(root), {}) or {}).get("sessions", [])
+    st = _state(root)
+    done = st.get("sessions", [])
+    cursors = st.get("cursors") or {}
     out = []
     for agent, p in found:
         try:
-            age = time.time() - p.stat().st_mtime
+            mt = p.stat().st_mtime
         except OSError:
             continue
-        if age < idle or (exclude_session and exclude_session in str(p)):
+        if time.time() - mt < idle or (exclude_session and exclude_session in str(p)):
             continue
-        if str(p) in done or any(k and k in p.stem for k in done):
-            continue
+        hit = cursors.get(p.stem) or cursors.get(str(p))
+        if hit:
+            if hit.get("mtime") is not None and mt <= float(hit["mtime"]):
+                continue
+        elif str(p) in done or any(k and k in p.stem for k in done):
+            continue  # 옛 점검 기록(커서 없음) — 그 세션이 다시 이어질 때 SessionEnd가 커서를 만든다
         out.append((agent, p))
         if len(out) >= config.get("selfcheck.pending_sessions", root):
             break

@@ -48,7 +48,8 @@ class HandlersTest(HarnessTestCase):
             end = HookContext("SessionEnd", "claude", {}, root=str(self.root), session_id="S1", transcript_path="/t/S1.jsonl")
             handlers.on_session_end(end)
             handlers.on_session_end(end)
-        self.assertEqual(sp.call_count, 1)
+        # SessionEnd마다(이어 쓴 세션은 턴마다 끝난다) — 이미 본 구간 거르기는 selfcheck 커서가 한다
+        self.assertEqual(sp.call_count, 2)
         self.assertIn("selfcheck", sp.call_args[0][0])
 
     def test_background_job(self):

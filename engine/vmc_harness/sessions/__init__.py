@@ -38,6 +38,7 @@ class Session:
     token_parts: Dict[str, int] = field(default_factory=dict)   # input·output·cache_read·cache_creation
     agent_sec: float = 0.0
     human_turns: int = 0
+    prompt_times: List[str] = field(default_factory=list)   # 구간과 무관한 세션 전체 사람 메시지 시각(iso) — 작업별 사람 턴 귀속(task/measure.py)
     measured: bool = False
     turns: List[Any] = field(default_factory=list)   # [(start_dt, end_dt)] 작업 구간과 겹친 턴(단계 나누기 — task/phases.py)
 

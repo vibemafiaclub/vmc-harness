@@ -269,6 +269,47 @@ def _hook_sec(root, task):
     return sum(secs) if secs else None
 
 
+def _overlap_sec(a, b, wins):
+    """[a, b) 와 구간들이 겹친 초. b가 None이면 끝없음."""
+    total = 0.0
+    for s0, e0 in wins:
+        lo = max(a, s0)
+        hi = e0 if b is None else (b if e0 is None else min(b, e0))
+        if hi is None:
+            return float("inf")
+        if hi > lo:
+            total += (hi - lo).total_seconds()
+    return total
+
+
+def owned_prompts(task, prompt_times, others=()):
+    """이 작업에 귀속되는 사람 메시지 수. 사람 메시지는 선언·재개(첫 도구 호출)보다 먼저 와서 작업 구간 밖에 놓인다 —
+    구간 안 메시지만 세면 늘 0이다(현장 결함, 0.1.12). 메시지 하나 = [그 메시지, 다음 사람 메시지) 턴.
+    그 턴과 가장 오래 겹친 작업 하나에만 센다(같은 턴의 재선언으로 이어진 작업이 둘 다 세지 않게 — 동률이면 뒤에 시작한 작업).
+    겹친 작업이 없는 턴(작업 없이 나눈 대화)은 어느 작업에도 안 센다."""
+    from vmc_harness.core.clock import parse_iso
+    mine = windows(task)
+    if not mine:
+        return 0
+    rivals = [(t, windows(t)) for t in others if t.get("task_id") != task.get("task_id")]
+    ats = sorted(d for d in (parse_iso(x) for x in prompt_times or []) if d is not None)
+    n = 0
+    for i, a in enumerate(ats):
+        b = ats[i + 1] if i + 1 < len(ats) else None
+        ov = _overlap_sec(a, b, mine)
+        if ov <= 0:
+            continue
+        start = mine[0][0]
+        best = True
+        for _, w in rivals:
+            o2 = _overlap_sec(a, b, w)
+            if o2 > ov or (o2 == ov and o2 > 0 and w and w[0][0] > start):
+                best = False
+                break
+        n += 1 if best else 0
+    return n
+
+
 def actual_of(session):
     """세션 파싱 결과 → 장부 actual. tokens = 캐시 읽기 제외(입력 + 캐시 생성 + 출력) — 예측과 같은 단위(D2).
     tokens_detail에 input·output·cache_read·cache_creation을 나눠 둔다."""
@@ -295,6 +336,12 @@ def finalize(root, task, transcript_path=None, agent=None):
             s = sessions.parse(tp, agent, windows=windows(task))
             if s.measured:
                 actual = actual_of(s)
+                if s.prompt_times:
+                    try:
+                        others = st.session_tasks(root, task.get("session_id"))
+                    except Exception:
+                        others = []
+                    actual["human_turns"] = owned_prompts(task, s.prompt_times, others)
                 try:  # 단계 나누기(spec 13) — 실패해도 실측은 남긴다
                     from vmc_harness.task import phases as _ph
                     phase_v, phase_d = _ph.compute(s)

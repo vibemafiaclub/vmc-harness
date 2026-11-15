@@ -112,8 +112,8 @@ class SelfcheckTest(HarnessTestCase):
         a = ledger.get_action(self.root, rules[0]["action_id"])
         self.assertTrue(a["human_requested"])
         self.assertEqual(a["basis"]["quote"], "앞으로 SQL 파일은 SQL 폴더에만 만들어")
-        # 같은 세션 두 번 안 돈다
-        self.assertEqual(self._run(_session(["x"]), out)["skipped"], "이미 점검함")
+        # 같은 세션의 이미 본 구간은 다시 안 본다
+        self.assertEqual(self._run(_session(["x"]), out)["skipped"], "새 구간 없음")
 
     def test_block_without_gate_generator_becomes_rule(self):
         out = {"corrections": 0, "learnings": [], "explicit_requests": [

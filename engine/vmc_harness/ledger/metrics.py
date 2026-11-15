@@ -7,7 +7,8 @@
 - gate_fire / gate_block / proceed_anyway(헛막기) / block_disputed(에이전트 반박 — 참고 지표) / gate_time(sec)   — 필드 gate_id
 - exposure                                                            — 필드 action_ids, card(카드별 반환 수), gate_id
 - card_search                                                         — 필드 sec, tokens(오버헤드만)
-- session_selfcheck                                                   — 필드 human_turns, tool_calls, corrections, measured
+- session_selfcheck                                                   — 필드 human_turns, tool_calls, corrections, measured,
+                                                                         continued(같은 세션의 이어진 구간 — 세션 수에 안 센다)
 - harness_overhead                                                    — 필드 sec, tokens
 - human_call / wait                                                   — 세션당 사람 개입 참고
 - verify_run                                                          — 고객 검증 명령(테스트·빌드·린트·타입체크·git commit 훅 근사) 소요.
@@ -78,12 +79,14 @@ def aggregate(events, loop_runs=(), pc=None):
             m["overhead"]["sec"] = round(m["overhead"]["sec"] + _num(e.get("sec")), 3)
             m["overhead"]["tokens"] += int(_num(e.get("tokens")))
         elif k == "session_selfcheck":
-            m["sessions"] += 1
+            # continued = 같은 세션의 이어진 구간(--resume) — 세션 수는 첫 점검에서만 세고 숫자만 더한다
+            if not e.get("continued"):
+                m["sessions"] += 1
             if e.get("measured"):
                 m["human_turns"] += int(_num(e.get("human_turns")))
                 m["tool_calls"] += int(_num(e.get("tool_calls")))
                 m["corrections"] += int(_num(e.get("corrections")))
-            else:
+            elif not e.get("continued"):
                 m["unmeasured_sessions"] += 1
         elif k == "harness_overhead":
             m["overhead"]["sec"] = round(m["overhead"]["sec"] + _num(e.get("sec")), 3)
