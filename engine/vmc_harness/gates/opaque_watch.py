@@ -188,7 +188,7 @@ def take(ctx):
         write_json(_record_file(root, _key(ctx)), {
             "at_ns": time.time_ns(), "session_id": ctx.session_id, "command": (ctx.command or "")[:500],
             "protected_globs": prot, "generated_globs": gen, "verification_globs": ver, "files": files, "backup": backup,
-            "kernel": _kernel_before(ctx), "dirty": _dirty_hashes(root)})
+            "kernel": _kernel_before(ctx), "dirty": _dirty_hashes(root), "sync": _sync_before(ctx)})
         return True
     except Exception:
         _take_attr_only(ctx)
@@ -199,7 +199,7 @@ def _take_attr_only(ctx):
     """대조는 못 해도 "이 명령이 쓴 파일" 찾기(_attribute)는 하게 실행 시각만 적는다."""
     try:
         write_json(_record_file(ctx.root, _key(ctx)), {"at_ns": time.time_ns(), "session_id": ctx.session_id, "attr_only": True,
-                                                    "dirty": _dirty_hashes(ctx.root)})
+                                                    "dirty": _dirty_hashes(ctx.root), "sync": _sync_before(ctx)})
     except Exception:
         pass
 
@@ -237,6 +237,90 @@ def _dirty_hashes(root):
         return _hashes(root, small)
     except Exception:
         return {}
+
+
+# 작업 트리를 이력·보관함에서 다시 쓰는 git 명령 — 이 명령이 바꾼 파일은 이 세션이 지은 게 아니다
+SYNC_GIT = {"pull", "rebase", "merge", "checkout", "switch", "stash", "reset", "restore", "cherry-pick", "am", "revert"}
+
+
+def _sync_before(ctx):
+    """명령에 git 동기화(pull·rebase·stash pop…)가 있으면 실행 전 HEAD와 꺼낼 보관함(stash)의 파일 목록. 없으면 None(비용 0)."""
+    from vmc_harness.gates import shell
+    subs, stash_ref = [], None
+    for seg in shell._segments(ctx.command or ""):
+        toks = [str(t) for t in seg]
+        if not toks or shell._base(toks[0]) != "git":
+            continue
+        rest = [t for t in toks[1:] if not t.startswith("-")]
+        if rest and rest[0] in SYNC_GIT:
+            subs.append(rest[0])
+            if rest[0] == "stash" and len(rest) > 1 and rest[1] in ("pop", "apply"):
+                stash_ref = rest[2:3] or ["stash@{0}"]
+    if not subs:
+        return None
+    root = ctx.root
+    out = {"head": gitutil.head(root), "stash": []}
+    if stash_ref:
+        rc, names, _ = git(root, "stash", "show", "--include-untracked", "--name-only", stash_ref[0])
+        if rc != 0:
+            rc, names, _ = git(root, "stash", "show", "--name-only", stash_ref[0])
+        out["stash"] = [globs.norm(x) for x in names.splitlines() if x.strip()] if rc == 0 else []
+    return out
+
+
+def _sync_changed(root, sync):
+    """git 동기화가 바꾼 파일 — 실행 전후 HEAD 차이 + 꺼낸 보관함 파일."""
+    if not sync:
+        return set()
+    out = set(sync.get("stash") or [])
+    before, now = sync.get("head"), gitutil.head(root)
+    if before and now and before != now:
+        rc, names, _ = git(root, "diff", "--name-only", "--no-renames", "-z", before, now)
+        if rc == 0:
+            out |= {globs.norm(x) for x in gitutil.split_z(names)}
+    return out
+
+
+def _claimed_by_others(root, session_id, task, rels, since_ns):
+    """rels 중 다른 세션의 살아 있는 작업(실행 시간 창 안에 활동)이 편집 기록이나 선언 범위로 가진 파일 — 이 작업 선언 범위 밖만.
+    살아 있다 = 창 시작 전에 끝나지 않았고, 마지막 활동이 창 시작보다 task.finalize_idle_min 넘게 앞서지 않는다(그 사이 긴 명령을 돌리는 중일 수 있다)."""
+    from vmc_harness.core.clock import parse_iso
+    from vmc_harness.task import lifecycle, scope
+    from vmc_harness.task import state as tstate
+    mine_decl = (task or {}).get("declare") or {}
+    cand = [r for r in rels if not (mine_decl and scope.in_scope(root, mine_decl, r))]
+    if not cand:
+        return set()
+    idle_ns = int(float(config.get("task.finalize_idle_min", root)) * 60 * 1000 * 1000 * 1000)
+    floor = since_ns - idle_ns
+    out = set()
+    d = tstate.task_path(root, "x").parent
+    for f in d.glob("*.json"):
+        if "." in f.stem:
+            continue
+        try:
+            if f.stat().st_mtime_ns < floor:
+                continue   # 그 뒤로 저장된 적 없는 작업 — 창 안에 살아 있지 않았다
+        except OSError:
+            continue
+        t = read_json(f, None) or {}
+        sid = t.get("session_id")
+        if not sid or sid == session_id or t.get("task_id") == (task or {}).get("task_id"):
+            continue
+        end = parse_iso(t.get("ended_at")) if t.get("ended_at") else None
+        last = lifecycle.last_activity(t)
+        if (end and _ns(end) < since_ns) or (last and _ns(last) < floor):
+            continue
+        edits = {scope.norm(x) for x in t.get("edits") or []}
+        decl = t.get("declare") or {}
+        for r in cand:
+            if r not in out and (r in edits or (decl and scope.in_scope(root, decl, r))):
+                out.add(r)
+    return out
+
+
+def _ns(dt):
+    return int(dt.timestamp() * 1000 * 1000 * 1000)
 
 
 def _kernel_before(ctx):
@@ -460,7 +544,8 @@ def _additive_after(root, rec, rel):
 
 def _attribute(root, ctx, task, rec):
     """이 명령이 쓴 파일(실행 전 기록 이후 수정된 작업 트리 변경)을 이 작업의 편집으로 남긴다 — 착수 선언이 없으면 세션 기록에.
-    그 사이 다른 세션이 도구로 쓴 파일(state.written_by_others)은 뺀다.
+    이 세션이 썼다는 근거가 시간 창뿐인 파일은 뺀다: 그 사이 다른 세션이 도구로 쓴 파일(state.written_by_others),
+    다른 세션의 살아 있는 작업이 편집 기록·선언 범위로 가진 파일(이 작업 범위 밖), 같은 명령 안 git 동기화가 바꾼 파일.
     "이번 작업이 바꾼 것"(task.scope.touched)은 기록된 편집만 세므로, 이걸 빼면 스크립트로 쓴 파일이 빠진다."""
     try:
         from vmc_harness.task import scope
@@ -473,6 +558,11 @@ def _attribute(root, ctx, task, rec):
             from vmc_harness.gates import state
             others = state.written_by_others(root, ctx.session_id, rels, since)
             rels = [r for r in rels if r not in others]
+        if rels:
+            # git 동기화(pull·rebase·stash pop…)가 바꾼 파일, 다른 세션의 살아 있는 작업이 가진 파일(이 작업 선언 범위 밖)은
+            # 이 세션이 썼다는 근거가 시간 창뿐이다 — 이 작업 것으로 세지 않는다(동시 세션·긴 명령 오귀속, 현장 결함)
+            drop = _sync_changed(root, rec.get("sync")) | _claimed_by_others(root, ctx.session_id, task, rels, since)
+            rels = [r for r in rels if r not in drop]
         before = rec.get("dirty") or {}
         if rels and before:
             # 실행 전과 내용이 같은 파일은 이 명령이 쓴 게 아니다(--autostash가 미커밋 파일을 같은 내용으로 다시 써 수정 시각만 바뀜)
