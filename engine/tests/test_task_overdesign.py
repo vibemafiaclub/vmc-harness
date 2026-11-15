@@ -218,3 +218,67 @@ class OverdesignExistingUsageTest(HarnessTestCase):
         keep, dropped = overdesign.existing_usage(self.root, sigs, ["app/new/page.tsx"])
         self.assertEqual([s["name"] for s in dropped], ["쓰이지 않는 것으로 보이는 cs-top div와 isHero 플래그"])
         self.assertEqual(len(keep), 2)
+
+
+class OverdesignExistedAtBaseTest(HarnessTestCase):
+    """착수 때 이미 있던 형식·필드를 지목한 LLM 신호는 뺀다(2026-11-12·13 현장 — 기존 회의록 절, 기존 타입 필드)."""
+
+    def setUp(self):
+        super().setUp()
+        for n in ("a", "b"):
+            self.write("logs/2611%s_1on1.md" % ("01" if n == "a" else "02"), "# 회의\n## 요약\n- x\n## 목표 메모\n- y\n")
+        self.write("lib/people.ts", "export type Person = { name: string; role?: string; status: string }\n"
+                                   "export const PEOPLE: Person[] = [{ name: \"갑\", status: \"planned\" }]\n")
+        self.commit()
+        st.session_touch(self.root, "S1", "claude")
+        with mock.patch("vmc_harness.task.pm.start", return_value="sync"):
+            self.task = dec.declare(self.root, {"intent": "회의록·목록 갱신", "scope": ["logs/", "lib/people.ts"],
+                                                "predict": {"tokens": [1, 2, 3], "agent_sec": [60, 120, 170]}})["task"]
+
+    def test_existing_section_format_and_field(self):
+        self.agent_write("logs/261103_1on1.md", "# 회의\n## 요약\n- z\n## 목표 메모\n- w\n## 묶음 참고\n- 새 절\n")
+        self.agent_write("lib/people.ts", "export type Person = { name: string; role?: string; status: string; next?: string }\n"
+                                         "export const PEOPLE: Person[] = [{ name: \"갑\", role: \"개발\", status: \"active\", next: \"d\" }]\n")
+        sigs = [{"kind": "unrequested_option", "path": "logs/261103_1on1.md", "name": "요청에 없던 목표 메모 섹션 추가"},
+                {"kind": "unrequested_option", "path": "logs/261103_1on1.md", "name": "요청에 없던 '묶음 참고' 섹션 추가"},
+                {"kind": "unrequested_option", "path": "lib/people.ts", "name": "Person의 role 필드 신설"},
+                {"kind": "unrequested_option", "path": "lib/people.ts", "name": "카드마다 next 필드 추가"},
+                {"kind": "unrequested_option", "path": "lib/people.ts", "name": "role 값으로 정렬하는 분기 추가"}]
+        task = st.by_id(self.root, self.task["task_id"])
+        keep, dropped = overdesign.existed_at_base(self.root, task, sigs)
+        self.assertEqual([s["name"] for s in dropped], ["요청에 없던 목표 메모 섹션 추가", "Person의 role 필드 신설"])
+        self.assertEqual(len(keep), 3)
+
+
+class OverdesignBlockingTest(HarnessTestCase):
+    def test_new_file_signals_are_note_only(self):
+        sigs = [{"kind": "new_file_out_of_scope", "path": "a/b.md"}, {"kind": "new_module_out_of_scope", "path": "a"},
+                {"kind": "unreferenced_public", "path": "a/c.py", "name": "f"}]
+        self.assertEqual([s["kind"] for s in overdesign.blocking(sigs)], ["unreferenced_public"])
+
+    def test_shown_masks_numbers_and_drops_empty(self):
+        sigs = [{"kind": "unrequested_option", "path": None, "name": " "},
+                {"kind": "unrequested_option", "path": "a.md", "name": "요청에 없던 30분 알림 설정"},
+                {"kind": "unrequested_option", "path": None, "name": "예산 상한 옵션"}]
+        out = overdesign.shown(sigs)
+        self.assertEqual([s["name"] for s in out], ["요청에 없던 ○분 알림 설정"])
+        self.assertEqual(overdesign.shown([{"kind": "unrequested_option", "name": ""}]), [])
+
+
+class OverdesignRepoDependencyTest(HarnessTestCase):
+    """새 앱의 필수 의존성(react·react-dom)이 저장소의 다른 앱에 이미 있으면 새 의존성이 아니다(2026-11-16 현장)."""
+
+    def test_dependency_already_used_in_repo(self):
+        self.write("apps/web/package.json", json.dumps({"dependencies": {"next": "1", "react": "1", "react-dom": "1"}}))
+        self.write("svc/requirements.txt", "requests==2\n")
+        self.commit()
+        st.session_touch(self.root, "S1", "claude")
+        with mock.patch("vmc_harness.task.pm.start", return_value="sync"):
+            t = dec.declare(self.root, {"intent": "샘플 앱", "scope": ["apps/sample/", "tools/"], "new": ["apps/sample/", "next"],
+                                        "predict": {"tokens": [1, 2, 3], "agent_sec": [60, 120, 170]}})["task"]
+        self.agent_write("apps/sample/package.json",
+                         json.dumps({"dependencies": {"next": "1", "react": "1", "react-dom": "1", "left-pad": "1"}}))
+        self.agent_write("tools/requirements.txt", "requests==2\nhttpx\n")
+        t = st.by_id(self.root, t["task_id"])
+        deps = {s["name"] for s in overdesign.machine_signals(self.root, t) if s["kind"] == "new_dependency"}
+        self.assertEqual(deps, {"left-pad", "httpx"})

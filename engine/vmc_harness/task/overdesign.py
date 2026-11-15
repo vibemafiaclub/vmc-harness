@@ -9,9 +9,12 @@
 - near_duplicate_function 기존 함수와 거의 같은 새 함수(정규화 AST 해시·유사도, Python)
 LLM 신호(중·대만, 새 컨텍스트, 목표만):
 - unrequested_option      요청에 없는 옵션·설정·기능 — 이번 작업 지시(착수 직전 사람 메시지부터)와 착수 선언 대비.
-                          기존 관례를 따른 새 파일(같은 폴더·같은 이름 끝이 이미 여럿)은 신호에서 뺀다
+                          기존 관례를 따른 새 파일(같은 폴더·같은 이름 끝이 이미 여럿)·같은 폴더 기존 파일에 있던 절·
+                          착수 때 이미 있던 필드를 지목한 신호는 뺀다
 
 신호가 잡히면 축소 검토 1회만(handlers.on_stop). 메시지는 무엇이 잡혔는지만(01 P6).
+새 파일·새 모듈(NOTE_ONLY)은 막지 않는다 — 완료 보고 "범위 밖 변경"에 이미 나온다. 실측(11-11~16): 이 신호만으로 막은 8건은
+전부 재선언만 하고 결과물이 그대로였고, 결과물을 바꾼 차단 9건은 모두 다른 신호였다.
 """
 
 import ast
@@ -45,6 +48,8 @@ LABEL = {
     "near_duplicate_function": "기존 함수와 거의 같은 새 함수",
     "unrequested_option": "요청에 없는 옵션·기능",
 }
+# 막지 않고 완료 보고(범위 밖 변경)로만 보이는 신호
+NOTE_ONLY = ("new_file_out_of_scope", "new_module_out_of_scope")
 
 OD_SYSTEM = (
     "목표: 이번 작업의 요청 대비 과한 것을 찾아라 — 요청에 없는 옵션·설정·기능·확장 지점.\n"
@@ -184,6 +189,19 @@ def _deps(path, text):
 def _is_dep_file(path):
     name = PurePosixPath(path).name
     return any(fnmatch.fnmatch(name, p) or fnmatch.fnmatch(path, p) for p in DEP_FILES)
+
+
+def _repo_deps(root, base, base_files):
+    """착수 시점 저장소의 의존성 이름 — {"package.json": {...}, "py": {...}}(Python 파일 형식끼리는 한 묶음)."""
+    out = {"package.json": set(), "py": set()}
+    for f in base_files or ():
+        if "node_modules/" not in f and _is_dep_file(f):
+            out[_dep_kind(f)] |= _deps(f, _show(root, base, f) or "")
+    return out
+
+
+def _dep_kind(path):
+    return "package.json" if PurePosixPath(path).name == "package.json" else "py"
 
 
 # ---- Python AST ----
@@ -483,8 +501,9 @@ def machine_signals(root, task, files=None):
                 seen_mod.add(top)
                 signals.append({"kind": "new_module_out_of_scope", "path": top})
 
-    # 새 의존성
+    # 새 의존성 — 저장소의 다른 의존성 파일(착수 시점)에 이미 있는 이름은 새 의존성이 아니다(새 앱의 react·react-dom 등)
     new_names = " ".join(declare.get("new") or []).lower()
+    repo_deps = None
     for f in files:
         if not _is_dep_file(f):
             continue
@@ -492,6 +511,10 @@ def machine_signals(root, task, files=None):
         after = _deps(f, _read(root, f) or "")
         for name in sorted(after - before):
             if name.lower() in new_names:
+                continue
+            if repo_deps is None:
+                repo_deps = _repo_deps(root, base, base_files)
+            if name in repo_deps[_dep_kind(f)]:
                 continue
             signals.append({"kind": "new_dependency", "path": f, "name": name})
 
@@ -806,12 +829,14 @@ def run_llm(root, task_id, transcript_path=None, agent=None):
             rec["tokens"] = res.get("tokens", 0)
             obj = parse_json_obj(res.get("text")) or {}
             for s in obj.get("signals") or []:
-                if isinstance(s, dict) and s.get("what"):
+                if isinstance(s, dict) and str(s.get("what") or "").strip():
                     rec["signals"].append({"kind": "unrequested_option", "path": s.get("path"),
                                            "name": str(s["what"])[:120]})
             rec["signals"] = own_signals(rec["signals"], files)
             rec["signals"], used = existing_usage(root, rec["signals"], files)
             rec["existing_usage"] = [x.get("name") for x in used]
+            rec["signals"], had = existed_at_base(root, task, rec["signals"])
+            rec["existed"] = [x.get("name") for x in had]
             conv = convention_files(root, task, files)
             rec["signals"] = [x for x in rec["signals"] if not x.get("path") or _nfc(scope.norm(x["path"])) not in conv]
             rec["convention"] = sorted(conv)
@@ -861,6 +886,78 @@ def existing_usage(root, signals, files):
         else:
             keep.append(sgl)
     return keep, dropped
+
+
+HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", re.M)
+FIELD_CLAIM = re.compile(r"필드|속성|\bfield|\bprop", re.I)
+WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]+")
+
+
+def _headings(text):
+    return {h.strip() for h in HEADING.findall(text or "") if len(h.strip()) >= 2}
+
+
+def _sibling_heading_count(root, base, path, heading):
+    """착수 시점(base) 같은 폴더의 다른 파일 중 이 제목의 절이 있는 파일 수."""
+    parent = str(PurePosixPath(path).parent)
+    pat = r"^[[:space:]]{0,3}#{1,6}[[:space:]]+" + re.sub(r"([\\.^$|?*+()\[\]{}])", r"\\\1", heading) + r"[[:space:]#]*$"
+    rc, out, _ = gitutil.git(root, "grep", "-l", "-E", "-e", pat, base, "--", (parent + "/") if parent not in (".", "") else ".")
+    if rc not in (0, 1):
+        return 0
+    n = 0
+    for line in out.splitlines():
+        f = _nfc(line.split(":", 1)[-1].strip())
+        if str(PurePosixPath(f).parent) == parent and f != _nfc(path):
+            n += 1
+    return n
+
+
+def existed_at_base(root, task, signals):
+    """착수 때 이미 있던 것을 지목한 신호를 뺀다. LLM은 diff만 보므로 형식·필드가 새로 생긴 줄 안다(2026-11-12·13 현장).
+    ① 지목한 절(마크다운 제목)이 같은 폴더 기존 파일 task.overdesign_convention_min개 이상에 이미 있다 — 기존 형식을 따른 것.
+    ② '필드·속성'이라고 지목한 이름(영문 식별자)이 모두 착수 시점 그 파일에 이미 있다 — 새 필드가 아니다.
+    돌려주는 값: (남길 신호, 뺀 신호)."""
+    base = (task.get("base") or {}).get("head")
+    if not base:
+        return list(signals or []), []
+    need = config.get("task.overdesign_convention_min", root)
+    keep, dropped = [], []
+    for sgl in signals or []:
+        what, path = str(sgl.get("name") or ""), sgl.get("path")
+        hit = False
+        if path:
+            path = _nfc(scope.norm(path))
+            old = _show(root, base, path)
+            added = _headings(_read(root, path)) - _headings(old)
+            hit = any(h in what and _sibling_heading_count(root, base, path, h) >= need for h in added)
+            if not hit and old and FIELD_CLAIM.search(what):
+                names = {w for w in WORD.findall(what) if w.lower() not in ("field", "fields", "prop", "props")}
+                hit = bool(names) and all(re.search(r"\b%s\b" % re.escape(w), old) for w in names)
+        (dropped if hit else keep).append(sgl)
+    return keep, dropped
+
+
+def shown(signals):
+    """막을 때 보일 신호 — 무엇이 잡혔는지 말할 수 있는 것만. 작업 중 주입 금지 숫자(시간·퍼센트 등)가 든 지적은 숫자를
+    가려 싣고, 그래도 실을 수 없거나 내용이 비면 뺀다. 이전에는 통째로 가린 '요청에 없는 옵션·기능 ' 빈 차단이 났다(2026-11-14 현장)."""
+    from vmc_harness.core import inject
+    out = []
+    for sgl in signals or []:
+        if not (str(sgl.get("name") or "").strip() or str(sgl.get("path") or "").strip()):
+            continue
+        if inject.message("gate_violation", describe([sgl])):
+            out.append(sgl)
+            continue
+        masked = dict(sgl, name=re.sub(r"\d+(?:[.,:~\-]\d+)*", "○", str(sgl.get("name") or "")),
+                      detail=re.sub(r"\d+(?:[.,:~\-]\d+)*", "○", str(sgl.get("detail") or "")) or None)
+        if (masked["name"].strip() or str(sgl.get("path") or "").strip()) and inject.message("gate_violation", describe([masked])):
+            out.append(masked)
+    return out
+
+
+def blocking(signals):
+    """막는 신호 — NOTE_ONLY(새 파일·새 모듈)는 완료 보고에만."""
+    return [s for s in signals or [] if s.get("kind") not in NOTE_ONLY]
 
 
 def own_signals(signals, files):

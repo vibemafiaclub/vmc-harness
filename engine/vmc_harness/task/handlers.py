@@ -222,18 +222,19 @@ def on_stop(ctx):
             llm = overdesign.read_llm(root, task["task_id"], files)
             if llm:
                 signals += llm.get("signals") or []
-        if signals and _proceeded(ctx):
+        # 새 파일·모듈은 완료 보고(범위 밖 변경)로만, 무엇이 잡혔는지 말할 수 없는 신호(빈 지적)는 막지 않는다
+        block = overdesign.shown(overdesign.blocking(signals))
+        if block and _proceeded(ctx):
             od["reviewed"] = True   # 사람이 "그냥 진행"으로 넘긴 과설계 차단 — 다시 막지 않는다
             od["proceeded"] = True
-            signals = []
-        if signals:
+            block = []
+        reason = inject.message("gate_violation", overdesign.describe(block)) if block else None
+        if reason:
             od["reviewed"] = True
             od["reviewed_at"] = now_iso()
             od["signals"] = sorted({s["kind"] for s in signals})
             od["details"] = signals
             od["lines_before"] = scope.added_lines(root, task, files)
-            reason = inject.message("gate_violation", overdesign.describe(signals)) or \
-                inject.message("gate_violation", overdesign.describe([{"kind": k} for k in od["signals"]]))
             try:
                 events.log(root, "gate_block", gate_id="kernel.overdesign", task_id=task["task_id"],
                            signals=od["signals"])

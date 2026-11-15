@@ -173,6 +173,29 @@ class HandlersTest(HarnessTestCase):
         self.assertIn("new_file_out_of_scope", rec["overdesign"]["signals"])
         self.assertTrue(rec["overdesign"]["trimmed"])
 
+    def test_new_file_alone_does_not_block(self):
+        """선언에 없던 새 파일·모듈만이면 막지 않고 완료 보고(범위 밖 변경)로만 — 실측 8건 모두 재선언만 했다(11-11~16)."""
+        dec.declare(self.root, raw())
+        self._edit("src/list.py", "def sort_items(xs):\n    return sorted(xs, key=str)\n")
+        self._edit("docs/new_note.md", "메모\n")
+        r = handlers.on_stop(ctx(self.root, "Stop"))
+        self.assertFalse(r and r.block)
+        self.assertIn("범위 밖 변경 1건", r.notice)
+        self.assertFalse(st.current(self.root, "S1")["overdesign"].get("reviewed"))
+
+    def test_empty_llm_signal_does_not_block(self):
+        """지적 내용이 빈 LLM 신호로 '요청에 없는 옵션·기능 ' 빈 차단을 내지 않는다(2026-11-14 현장)."""
+        dec.declare(self.root, raw())
+        self._edit("src/list.py", "def sort_items(xs):\n    return sorted(xs, key=str)\n")
+        t = st.current(self.root, "S1")
+        t["size"] = "mid"
+        st.save(self.root, t)
+        with mock.patch("vmc_harness.task.overdesign.spawn_llm"), \
+                mock.patch("vmc_harness.task.overdesign.read_llm",
+                           return_value={"status": "done", "signals": [{"kind": "unrequested_option", "name": " "}]}):
+            r = handlers.on_stop(ctx(self.root, "Stop"))
+        self.assertFalse(r and r.block)
+
     def test_out_of_scope_record_only(self):
         dec.declare(self.root, raw())
         self._edit("src/list.py", "a = 2\n")
