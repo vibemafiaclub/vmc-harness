@@ -199,15 +199,37 @@ def grade(root, wt, base, pin_commit, change_commit, cand, change, deadline=None
 
 # ---- 아침 머지 ----
 
+MERGE_BASES = ("cleansing", "diagnosis_auto")  # 루프가 준비한 것: 클렌징·루프 티켓 / 진단 자동 반영 structure
+
+
 def prepared_actions(root):
     return [a for a in ledger.list_actions(root)
-            if a.get("status") == "prepared" and (a.get("basis") or {}).get("type") == "cleansing"]
+            if a.get("status") == "prepared" and (a.get("basis") or {}).get("type") in MERGE_BASES]
+
+
+def _is_auto(a):
+    return (a.get("basis") or {}).get("type") == "diagnosis_auto"
+
+
+def _cand_id(a):
+    return a.get("candidate_id") or (a.get("basis") or {}).get("ref")
+
+
+def _today():
+    return now().astimezone().strftime("%Y-%m-%d")
+
+
+def _wait(root, a, reason, out):
+    """머지를 미룬다. 진단 자동 반영은 사람 작업 트리와 겹치면 그날은 다시 시도하지 않는다(skip_day)."""
+    out.append({"action_id": a["action_id"], "result": "waiting", "reason": reason})
+    if _is_auto(a):
+        ledger.update_action(root, a["action_id"], skip_day=_today(), skip_reason=reason)
 
 
 def _discard(root, action, reason):
     ledger.update_action(root, action["action_id"], status="reverted", discarded=True,
                          discard_reason=reason, discarded_at=now_iso())
-    cid = (action.get("basis") or {}).get("ref")
+    cid = _cand_id(action)
     if cid:
         try:
             ledger.update_candidate(root, cid, status="open")
@@ -220,17 +242,30 @@ def _discard(root, action, reason):
 
 def morning(root):
     """준비된 A·B 정리를 main에 반영. [{"action_id","result","reason"}]"""
+    if not config.get("loop.enabled", root) or not config.get("loop.auto_merge", root):
+        return []
+    from vmc_harness.loop import activity
+    if activity.is_running(root):
+        return []
+    return merge_actions(root, prepared_actions(root))
+
+
+def merge_actions(root, actions):
+    """준비된 조치들을 main에 반영(아침 머지와 진단 자동 반영이 같이 쓴다). 사람 미커밋 파일과 겹치면 미루고,
+    main이 움직였으면 별도 worktree에서 리베이스 뒤 다시 검사한다 — 사람 작업 트리에는 빨리감기만 한다."""
     out = []
     if not config.get("loop.enabled", root) or not config.get("loop.auto_merge", root):
         return out
-    from vmc_harness.loop import activity, fixation
-    if activity.is_running(root):
-        return out
+    from vmc_harness.loop import fixation
     main = gitops.main_branch(root)
     merged = []
-    for a in prepared_actions(root):
+    for a in actions:
         aid = a["action_id"]
-        if a.get("grade") not in ("A", "B") and not (a.get("grade") == "S" and config.get("loop.structure_direct", root)):
+        if _is_auto(a) and a.get("skip_day") == _today():
+            out.append({"action_id": aid, "result": "waiting", "reason": "오늘은 건너뜀(%s)" % a.get("skip_reason")})
+            continue
+        if a.get("grade") not in ("A", "B") and not (a.get("grade") == "S" and (
+                config.get("loop.structure_direct", root) or _is_auto(a))):
             continue
         br = a.get("branch")
         if not br or not gitops.rev(root, "refs/heads/%s" % br):
@@ -252,7 +287,7 @@ def morning(root):
             ledger.update_action(root, aid, blocked_by="qa_regression", blocked_at=now_iso())
             continue
         if set(files) & gitops.dirty_files(root):
-            out.append({"action_id": aid, "result": "waiting", "reason": "작업 중인 파일"})
+            _wait(root, a, "작업 중인 파일", out)
             continue
         if not gitops.is_ancestor(root, main, br):
             name = br[len(gitops.BRANCH_PREFIX):]
@@ -262,7 +297,7 @@ def morning(root):
             wt.parent.mkdir(parents=True, exist_ok=True)
             rc, _, _ = git(root, "worktree", "add", "-q", str(wt), br, timeout=120)
             if rc != 0:
-                out.append({"action_id": aid, "result": "waiting", "reason": "worktree 실패"})
+                _wait(root, a, "worktree 실패", out)
                 continue
             ok, why = gitops.rebase_onto(wt, main)
             if ok and a.get("rerun"):  # 루프 티켓(실패 테스트 복구·진단 제안) — 대상 통과·새 실패 0을 다시 잰다
@@ -280,7 +315,7 @@ def morning(root):
                 continue
         ok, why = gitops.fast_forward_main(root, main, br)
         if not ok:
-            out.append({"action_id": aid, "result": "waiting", "reason": why})
+            _wait(root, a, why, out)
             continue
         commits = _branch_commits(root, a.get("base"), main)
         deadline = (now() + _dt.timedelta(days=config.get("judge.max_days", root))).isoformat(timespec="seconds")
@@ -288,7 +323,7 @@ def morning(root):
         ledger.update_action(root, aid, status="trial", merged_at=now_iso(), commits=commits or a.get("commits") or [],
                              trial={"exposures": 0, "negatives": 0, "deadline": deadline})
         git(root, "branch", "-D", br)
-        cid = (a.get("basis") or {}).get("ref")
+        cid = _cand_id(a)
         if cid:
             try:
                 ledger.update_candidate(root, cid, status="resolved", resolved_reason="merged", resolved_at=now_iso())
@@ -309,6 +344,19 @@ def _branch_commits(root, base, main):
 
 
 def _notify(root, merged):
+    auto = [a for a in merged if _is_auto(a)]
+    merged = [a for a in merged if not _is_auto(a)]
+    for a in auto:  # 진단 자동 반영은 건마다 한 줄 + 되돌리기 명령
+        try:
+            from vmc_harness.bootstrap import autoapply
+            from vmc_harness.core import notices
+            notices.add(root, "diagnosis_auto_applied", "flow",
+                        autoapply.notice_line((a.get("auto") or {}).get("title") or a.get("hypothesis"), a["action_id"]),
+                        area=a.get("area"), refs={"action_id": a["action_id"]})
+        except Exception:
+            pass
+    if not merged:
+        return
     try:
         from vmc_harness.core import notices
         first = merged[0].get("hypothesis") or ""
