@@ -10,7 +10,7 @@ from vmc_harness.core import events, ledger
 from vmc_harness.gates import proceed, state
 from vmc_harness.ledger import metrics
 
-EDIT = {"old_string": "assert 1", "new_string": "assert 0"}
+EDIT = {"old_string": "assert 1", "new_string": "pass"}   # 검증 호출 감소 — 약화 신호
 
 
 class TestDispute(TaskMixin, GatesCase):

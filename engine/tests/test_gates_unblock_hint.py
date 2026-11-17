@@ -24,18 +24,19 @@ class TestUnblockHint(TaskMixin, GatesCase):
     def test_proceed_allowed_gate_has_hint_and_passes_filter(self):
         self.set_task()
         out = self.hook("PreToolUse", "Edit", {"file_path": str(self.root / "tests/test_calc.py"),
-                                               "old_string": "assert 1", "new_string": "assert 0"})
+                                               "old_string": "assert 1", "new_string": "pass"})
         self.assertDenied(out, "검증물 변조")
         r = _reason(out)
         self.assertTrue(r.startswith("[vmc-harness:gate_violation] "), r)
         self.assertIn("'그냥 진행'", r)
+        self.assertIn("그 파일은 통과", r)
         self.assertIn("그대로 전한다", r)
         ok, _ = dispatcher.valid_message(r, False)
         self.assertTrue(ok)
         # 그 문구로 실제로 한 번 풀린다
         self.hook("UserPromptSubmit", prompt="그냥 진행")
         self.assertAllowed(self.hook("PreToolUse", "Edit", {"file_path": str(self.root / "tests/test_calc.py"),
-                                                            "old_string": "assert 1", "new_string": "assert 0"}))
+                                                            "old_string": "assert 1", "new_string": "pass"}))
 
     def test_completion_stop_has_hint(self):
         self.set_task()

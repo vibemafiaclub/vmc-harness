@@ -1,6 +1,7 @@
-"""검증물 변조 — 기존 테스트 파일에 줄을 더하기만 하는 변경은 통과, 기존 줄 변경·삭제·건너뛰기 표시 추가는 계속 막음 (spec 02).
+"""검증물 변조 — 기존 테스트 파일은 약화 신호(건너뛰기 표시 증가·검증 호출 감소·테스트 정의 감소)가 있을 때만 막음 (spec 02).
 
 현장 결함: 검증물 변조 차단 6건 중 5건이 기존 테스트 파일에 새 테스트를 더하려던 것이었고, 에이전트는 새 파일로 쪼개 우회했다.
+현장 결함 C12: 상한 낮추기·시그니처 따라가기·주석 수정까지 막혀 우회용 복제 코드가 생겼다 — 신호 없는 수정은 통과하고 보고에 드러낸다.
 """
 
 
@@ -33,10 +34,20 @@ class TestTamperAdditive(TaskMixin, GatesCase):
                                      "    def test_z(self):\n        self.assertTrue(True)\n\n    def test_a(self):"))
 
     def test_edit_changing_or_skipping_blocked(self):
-        self.assertDenied(self.edit("tests/test_calc.py", "assertEqual(1, 1)", "assertEqual(1, 2)"), "검증물 변조")
+        self.assertDenied(self.edit("tests/test_calc.py", "        self.assertEqual(1, 1)\n", "        pass\n"), "검증 호출 감소")
+        self.assertDenied(self.edit("tests/test_calc.py", "    def test_a(self):\n        self.assertEqual(1, 1)\n", ""),
+                          "테스트 정의 감소")
         self.assertDenied(self.edit("tests/test_calc.py", "    def test_a(self):",
                                     "    @unittest.skip('later')\n    def test_a(self):"), "검증물 변조")
         self.assertDenied(self.edit("web/calc.spec.ts", "  it('adds'", "  it.only('mul', () => {})\n  it('adds'"))
+
+    def test_non_weakening_change_allowed_and_recorded(self):
+        """상한 낮추기·인자 추가·주석 수정 — 약화 신호 없음(현장 결함 C12). 이벤트 test_modified로 남는다."""
+        from vmc_harness.core import events
+        self.assertAllowed(self.edit("tests/test_calc.py", "assertEqual(1, 1)", "assertEqual(f(1, ctx), 1)  # docs/new.md"))
+        self.assertAllowed(self.edit("web/calc.spec.ts", "toBe(2)", "toBeLessThan(3)"))
+        ev = events.read(str(self.root), "test_modified")
+        self.assertEqual(sorted({f for e in ev for f in e["files"]}), ["tests/test_calc.py", "web/calc.spec.ts"])
 
     def test_write_keeps_all_old_lines(self):
         self.assertAllowed(self.write_all("tests/test_calc.py", PY + "\n    def test_b(self):\n        model.fit(x)\n        sys.exit(0)\n"))
@@ -51,7 +62,9 @@ class TestTamperAdditive(TaskMixin, GatesCase):
         add = "*** Begin Patch\n*** Update File: web/calc.spec.ts\n@@\n })\n+describe('mul', () => {})\n*** End Patch"
         self.assertAllowed(self.hook("PreToolUse", "apply_patch", {"command": add}, agent="codex"))
         change = "*** Begin Patch\n*** Update File: web/calc.spec.ts\n@@\n-    expect(1 + 1).toBe(2)\n+    expect(1 + 1).toBe(3)\n*** End Patch"
-        self.assertDenied(self.hook("PreToolUse", "apply_patch", {"command": change}, agent="codex"))
+        self.assertAllowed(self.hook("PreToolUse", "apply_patch", {"command": change}, agent="codex"))
+        drop = "*** Begin Patch\n*** Update File: web/calc.spec.ts\n@@\n-    expect(1 + 1).toBe(2)\n+    // later\n*** End Patch"
+        self.assertDenied(self.hook("PreToolUse", "apply_patch", {"command": drop}, agent="codex"))
         skip = "*** Begin Patch\n*** Update File: web/calc.spec.ts\n@@\n })\n+describe.skip('mul', () => {})\n*** End Patch"
         self.assertDenied(self.hook("PreToolUse", "apply_patch", {"command": skip}, agent="codex"))
 
@@ -67,7 +80,7 @@ class TestTamperAdditive(TaskMixin, GatesCase):
         self.assertIn("test_b", p.read_text(encoding="utf-8"))
         before = p.read_bytes()
         self.assertAllowed(self.hook("PreToolUse", "Bash", {"command": cmd}, tool_use_id="t2"))
-        p.write_text(PY.replace("(1, 1)", "(1, 2)"), encoding="utf-8")
+        p.write_text(PY.replace("        self.assertEqual(1, 1)\n", "        pass\n"), encoding="utf-8")
         post = self.hook("PostToolUse", "Bash", {"command": cmd}, tool_use_id="t2")
         self.assertEqual(post.get("decision"), "block", post)
         self.assertEqual(p.read_bytes(), before)

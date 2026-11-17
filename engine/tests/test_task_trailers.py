@@ -38,6 +38,21 @@ class TrailerTest(HarnessTestCase):
         out2 = trailers.apply("x\n\nCo-Authored-By: a <b>\n", [], ["Harness-Task: T-1"])
         self.assertEqual(out2, "x\n\nCo-Authored-By: a <b>\nHarness-Task: T-1\n")
 
+    def test_test_change_trailer_and_report(self):
+        """약화 신호 없이 통과한 기존 테스트 수정은 커밋 Harness-TestChange와 완료 보고에 드러난다(현장 결함 C12)."""
+        from vmc_harness.core import events
+        self.write("tests/test_list.py", "def test_a():\n    assert f() < 127\n")
+        self.commit("t")
+        t = dec.declare(self.root, raw(scope=["src/list.py", "tests/test_list.py"]))["task"]
+        self.agent_write("tests/test_list.py", "def test_a():\n    assert f() < 107\n")
+        events.log(str(self.root), "test_modified", task_id=t["task_id"], files=["tests/test_list.py"])
+        t = st.by_id(self.root, t["task_id"])
+        _, tr = trailers.lines_for_commit(self.root, t, staged=["tests/test_list.py"])
+        self.assertIn("Harness-TestChange: tests/test_list.py", tr)
+        self.assertIn("기존 테스트 수정: tests/test_list.py", report.build(self.root, t)["text"])
+        _, tr = trailers.lines_for_commit(self.root, t, staged=["src/list.py"])
+        self.assertFalse([x for x in tr if x.startswith("Harness-TestChange")])
+
     def test_git_hook_end_to_end(self):
         t = dec.declare(self.root, raw())["task"]
         hook = trailers.install_commit_hook(self.root)

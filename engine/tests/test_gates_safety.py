@@ -103,7 +103,7 @@ class TestTamper(TaskMixin, GatesCase):
 
     def test_existing_test_edit_blocked_new_allowed(self):
         self.set_task()
-        out = self.hook("PreToolUse", "Edit", {"file_path": str(self.root / "tests/test_calc.py"), "old_string": "1", "new_string": "0"})
+        out = self.hook("PreToolUse", "Edit", {"file_path": str(self.root / "tests/test_calc.py"), "old_string": "assert 1", "new_string": "pass"})
         self.assertDenied(out, "검증물 변조")
         out = self.hook("PreToolUse", "Write", {"file_path": str(self.root / "tests/test_new.py"), "content": "x"})
         self.assertAllowed(out)
@@ -128,10 +128,10 @@ class TestTamper(TaskMixin, GatesCase):
 
     def test_declared_test_change_allowed(self):
         self.set_task(declare={"test_change": {"files": ["tests/test_calc.py"], "reason": "기대값이 요구사항과 다름"}})
-        out = self.hook("PreToolUse", "Edit", {"file_path": str(self.root / "tests/test_calc.py"), "old_string": "1", "new_string": "0"})
+        out = self.hook("PreToolUse", "Edit", {"file_path": str(self.root / "tests/test_calc.py"), "old_string": "assert 1", "new_string": "pass"})
         self.assertAllowed(out)
         self.set_task(declare={"test_change": {"files": ["tests/test_calc.py"], "reason": ""}})
-        out = self.hook("PreToolUse", "Edit", {"file_path": str(self.root / "tests/test_calc.py"), "old_string": "1", "new_string": "0"})
+        out = self.hook("PreToolUse", "Edit", {"file_path": str(self.root / "tests/test_calc.py"), "old_string": "assert 1", "new_string": "pass"})
         self.assertDenied(out)
 
 

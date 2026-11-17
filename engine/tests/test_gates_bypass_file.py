@@ -19,36 +19,36 @@ def _edit(root, rel, old, new):
 class TestFileBypass(TaskMixin, GatesCase):
     def setUp(self):
         super().setUp()
-        self.write(T, "def test_a():\n    assert f() < 127  # docs/old.md\n")
+        self.write(T, "def test_a():\n    assert f() < 127  # docs/old.md\n    assert g()\n")
         self.write(U, "def test_b():\n    assert 1\n")
         self.commit()
         self.hook("SessionStart", source="startup")
         self.set_task()
 
     def test_second_edit_same_file_same_task_passes(self):
-        self.assertDenied(self.hook("PreToolUse", "Edit", _edit(self.root, T, "< 127", "< 107")), "검증물 변조")
+        self.assertDenied(self.hook("PreToolUse", "Edit", _edit(self.root, T, "    assert g()\n", "")), "검증물 변조")
         self.hook("UserPromptSubmit", prompt="그냥 진행")
-        self.assertAllowed(self.hook("PreToolUse", "Edit", _edit(self.root, T, "< 127", "< 107")))
+        self.assertAllowed(self.hook("PreToolUse", "Edit", _edit(self.root, T, "    assert g()\n", "")))
         # 같은 파일 두 번째 수정(주석)도 같은 작업 안이면 다시 묻지 않는다
-        self.assertAllowed(self.hook("PreToolUse", "Edit", _edit(self.root, T, "docs/old.md", "docs/new.md")))
+        self.assertAllowed(self.hook("PreToolUse", "Edit", _edit(self.root, T, "    assert f() < 127  # docs/old.md\n", "")))
 
     def test_other_file_not_covered(self):
-        self.assertDenied(self.hook("PreToolUse", "Edit", _edit(self.root, T, "< 127", "< 107")))
+        self.assertDenied(self.hook("PreToolUse", "Edit", _edit(self.root, T, "    assert g()\n", "")))
         self.hook("UserPromptSubmit", prompt="그냥 진행")
-        self.assertDenied(self.hook("PreToolUse", "Edit", _edit(self.root, U, "assert 1", "assert 2")), "검증물 변조")
+        self.assertDenied(self.hook("PreToolUse", "Edit", _edit(self.root, U, "    assert 1\n", "    pass\n")), "검증물 변조")
         # 다른 파일 차단이 허가를 가져가지 않았다
-        self.assertAllowed(self.hook("PreToolUse", "Edit", _edit(self.root, T, "< 127", "< 107")))
+        self.assertAllowed(self.hook("PreToolUse", "Edit", _edit(self.root, T, "    assert g()\n", "")))
 
     def test_other_task_not_covered(self):
-        self.assertDenied(self.hook("PreToolUse", "Edit", _edit(self.root, T, "< 127", "< 107")))
+        self.assertDenied(self.hook("PreToolUse", "Edit", _edit(self.root, T, "    assert g()\n", "")))
         self.hook("UserPromptSubmit", prompt="그냥 진행")
         self.set_task(task_id="T-261023-bbbbbb")
-        self.assertDenied(self.hook("PreToolUse", "Edit", _edit(self.root, T, "docs/old.md", "docs/new.md")))
+        self.assertDenied(self.hook("PreToolUse", "Edit", _edit(self.root, T, "    assert f() < 127  # docs/old.md\n", "")))
 
 
 class TestFileBypassOpaque(TaskMixin, OpaqueCase):
     def test_shell_edit_after_proceed_not_reverted(self):
-        self.write(T, "def test_a():\n    assert f() < 127\n")
+        self.write(T, "def test_a():\n    assert f() < 127\n    assert g()\n")
         self.commit()
         self.hook("SessionStart", source="startup")
         self.set_task()
@@ -56,9 +56,9 @@ class TestFileBypassOpaque(TaskMixin, OpaqueCase):
 
         def effect():
             p = self.root / T
-            p.write_text(p.read_text(encoding="utf-8").replace("127", "107"), encoding="utf-8")
+            p.write_text(p.read_text(encoding="utf-8").replace("    assert g()\n", ""), encoding="utf-8")
         _, post = self.run_cmd(cmd, effect)
-        self.assertIn("127", self.read(T))   # 허가 전 — 되돌림
+        self.assertIn("assert g()", self.read(T))   # 허가 전 — 되돌림
         self.hook("UserPromptSubmit", prompt="그냥 진행")
         _, post = self.run_cmd(cmd, effect)
-        self.assertIn("107", self.read(T))   # 허가 뒤 — 이 작업 동안 그 파일은 되돌리지 않는다
+        self.assertNotIn("assert g()", self.read(T))   # 허가 뒤 — 이 작업 동안 그 파일은 되돌리지 않는다

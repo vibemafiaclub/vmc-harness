@@ -3,6 +3,7 @@
 - 모든 변경 커밋: `Harness-Task: <task_id>`
 - 하네스 조치 커밋(L1 변경 포함): `Harness-Action: <action_id>`
 - 요청 밖 변경이 이 커밋에 있으면: `Harness-OutOfScope: <파일 목록>`
+- 약화 신호 없이 통과한 기존 테스트 수정이 이 커밋에 있으면: `Harness-TestChange: <파일 목록>`
 - 하네스 L1 변경(`.harness/` 중 ledger·cache 밖, AGENTS.md 표시 블록)은 "하네스 변경: …" 줄을 따로
 - 하네스는 push하지 않는다(사람 개입 기준 1) — 여기엔 push가 없다
 
@@ -17,7 +18,7 @@ from pathlib import Path
 from vmc_harness.core import gitutil
 from vmc_harness.task import scope, state as st
 
-KEYS = ("Harness-Task", "Harness-Action", "Harness-OutOfScope")
+KEYS = ("Harness-Task", "Harness-Action", "Harness-OutOfScope", "Harness-TestChange")
 HARNESS_LINE = "하네스 변경"
 HOOK_MARK = "# vmc-harness prepare-commit-msg"
 L1_EXCLUDE = (".harness/ledger/", ".harness/cache/")
@@ -79,6 +80,11 @@ def lines_for_commit(root, task=None, staged=None):
         oos = [o["path"] for o in scope.out_of_scope(root, task) if o["path"] in staged]
         if oos:
             trailers.append("Harness-OutOfScope: %s" % ", ".join(oos))
+        from vmc_harness.task import report
+        tm = [f for f in report.test_modified(root, task) if f in staged]
+        if tm:
+            # 약화 신호 없이 통과한 기존 테스트 수정 — 막지 않는 대신 커밋에 드러낸다(현장 결함 C12)
+            trailers.append("Harness-TestChange: %s" % ", ".join(tm))
     if l1:
         extra.append("%s: %s" % (HARNESS_LINE, ", ".join(l1)))
     return extra, trailers

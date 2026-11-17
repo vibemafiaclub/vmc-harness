@@ -44,6 +44,22 @@ def _approvals(root, task_id):
         return []
 
 
+def test_modified(root, task, files=None):
+    """이 작업에서 약화 신호 없이 통과한 기존 테스트 수정(gates.tamper — 이벤트 test_modified). 아직 바뀐 채인 파일만.
+    검증물 변조 게이트가 막지 않는 대신 사람이 보는 곳(완료 보고·커밋 Harness-TestChange)에 드러낸다(현장 결함 C12)."""
+    try:
+        from vmc_harness.core import events
+        ev = events.read(str(root), "test_modified")
+    except Exception:
+        return []
+    out = set()
+    for e in ev:
+        if e.get("task_id") == task.get("task_id"):
+            out |= set(e.get("files") or [])
+    files = set(files if files is not None else scope.touched(root, task))
+    return sorted(out & files)
+
+
 def build(root, task, allow_llm=False):
     """allow_llm=False(훅 — 시간 상한 안): 렌더링 검사만. `vmc-harness report`는 True(검사 실패 때만 1회 재작성)."""
     files = scope.touched(root, task)
@@ -58,6 +74,9 @@ def build(root, task, allow_llm=False):
         lines.append("- %s: %s" % (o["path"], why))
     if len(oos) > cap:
         lines.append("- 외 %d건" % (len(oos) - cap))
+    tm = test_modified(root, task, files)
+    if tm:
+        lines.append("기존 테스트 수정: %s" % ", ".join(tm[:cap]) + (" 외 %d개" % (len(tm) - cap) if len(tm) > cap else ""))
     if mods:
         lines.append("영향: %s" % ", ".join(mods[:cap]) + (" 외 %d개" % (len(mods) - cap) if len(mods) > cap else ""))
     if ev:
@@ -72,7 +91,7 @@ def build(root, task, allow_llm=False):
     text = "\n".join(lines)
     facts = {"out_of_scope": [{"path": o["path"], "reason": o.get("reason")} for o in oos],
              "modules": mods, "evidence": [m.get("kind") for m in ev],
-             "approvals": [a["approval_id"] for a in appr]}
+             "approvals": [a["approval_id"] for a in appr], "test_modified": tm}
     text = _render(root, facts, text, allow_llm)
     rec = {"task_id": task["task_id"], "text": text, "out_of_scope": oos, "modules": mods,
            "evidence": ev, "approvals": [a["approval_id"] for a in appr], "files": files}

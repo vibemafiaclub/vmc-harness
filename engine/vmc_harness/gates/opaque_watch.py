@@ -482,7 +482,8 @@ def check(ctx, task):
     if ver:   # 검증물 변조(현장 결함 C3·C4와 같은 부류 — 문자열 짐작 대신 실행 뒤 대조). 새 파일 추가는 막지 않는다
         from vmc_harness.gates import tamper
         existed = tamper._existing(root, ctx, task)
-        hit = [r for r in ver if existed(r) and not (ch[r]["kind"] == "modify" and _additive_after(root, rec, r))]
+        hit = [r for r in ver if existed(r) and not (ch[r]["kind"] == "modify" and _additive_after(root, rec, r, ctx))]
+        tamper._note_modified(ctx, task)
         from vmc_harness.gates import state as gstate
         # "그냥 진행"으로 이 작업에서 허용된 파일은 실행 뒤에도 되돌리지 않는다 — 허가를 받은 뒤에도 셸로 고친 테스트가
         # 되돌려졌다(현장 결함 C9)
@@ -537,13 +538,20 @@ def _before_text(root, rec, rel):
         return None
 
 
-def _additive_after(root, rec, rel):
-    """검증물 변조 — 기존 줄을 모두 남기고 더하기만 했고(건너뛰기 표시 없이) 되돌릴 필요가 없는가."""
+def _additive_after(root, rec, rel, ctx=None):
+    """검증물 변조 — 기존 테스트 파일을 약화하지 않았고(gates.tamper.weakening) 되돌릴 필요가 없는가. 판정할 수 없으면 False.
+    더하기만이 아닌 통과 변경은 ctx.state["test_modified"]에 모은다(완료 보고·커밋 표시)."""
     from vmc_harness.core.jsonio import read_text_any
     from vmc_harness.gates import tamper
     if not tamper.is_test_file(root, rel):
         return False
-    return tamper.additive_ok(_before_text(root, rec, rel), read_text_any(Path(root) / rel), root)
+    before, after = _before_text(root, rec, rel), read_text_any(Path(root) / rel)
+    w = tamper.weakening(before, after, root)
+    if w is None or w:
+        return False
+    if ctx is not None and tamper.added_lines(before, after) is None:
+        ctx.state.setdefault("test_modified", []).append(rel)
+    return True
 
 
 def _attribute(root, ctx, task, rec):
