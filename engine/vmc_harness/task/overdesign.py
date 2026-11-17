@@ -13,6 +13,9 @@ LLM 신호(중·대만, 새 컨텍스트, 목표만):
                           착수 때 이미 있던 필드를 지목한 신호는 뺀다
 
 신호가 잡히면 축소 검토 1회만(handlers.on_stop). 메시지는 무엇이 잡혔는지만(01 P6).
+LLM 신호(unrequested_option)도 막지 않는다 — 완료 보고 "요청 대비 확인"에만(2026-11-17, 현장 결함 C16). 해석이 필요한 신호를
+게이트로 쓰지 않는다: 옮긴 코드를 "로직 제거"로, 앞선 사람 지시 항목을 "요청에 없는 기능"으로 판정했고, 실측(context-hub·현장) LLM
+신호만으로 막은 26건 중 결과물이 줄어든 것은 4건, 22건은 그대로 끝났다.
 새 파일·새 모듈(NOTE_ONLY)은 막지 않는다 — 완료 보고 "범위 밖 변경"에 이미 나온다. 실측(11-11~16): 이 신호만으로 막은 8건은
 전부 재선언만 하고 결과물이 그대로였고, 결과물을 바꾼 차단 9건은 모두 다른 신호였다.
 """
@@ -49,7 +52,8 @@ LABEL = {
     "unrequested_option": "요청에 없는 옵션·기능",
 }
 # 막지 않고 완료 보고(범위 밖 변경)로만 보이는 신호
-NOTE_ONLY = ("new_file_out_of_scope", "new_module_out_of_scope")
+NOTE_ONLY = ("new_file_out_of_scope", "new_module_out_of_scope", "unrequested_option")
+LLM_NOTE = ("unrequested_option",)   # 해석이 필요한 신호 — 막지 않고 완료 보고에만(현장 결함 C16)
 
 OD_SYSTEM = (
     "목표: 이번 작업의 요청 대비 과한 것을 찾아라 — 요청에 없는 옵션·설정·기능·확장 지점.\n"
@@ -956,7 +960,7 @@ def shown(signals):
 
 
 def blocking(signals):
-    """막는 신호 — NOTE_ONLY(새 파일·새 모듈)는 완료 보고에만."""
+    """막는 신호 — NOTE_ONLY(새 파일·새 모듈·LLM 판정)는 완료 보고에만."""
     return [s for s in signals or [] if s.get("kind") not in NOTE_ONLY]
 
 

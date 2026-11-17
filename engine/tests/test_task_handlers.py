@@ -196,6 +196,23 @@ class HandlersTest(HarnessTestCase):
             r = handlers.on_stop(ctx(self.root, "Stop"))
         self.assertFalse(r and r.block)
 
+    def test_llm_signal_reported_not_blocking(self):
+        """LLM 판정(요청에 없는 옵션·기능)은 막지 않고 완료 보고에 싣는다 — 옮긴 코드를 '로직 제거'로 본 오탐(현장 결함 C16)."""
+        from vmc_harness.task import report
+        dec.declare(self.root, raw())
+        self._edit("src/list.py", "def sort_items(xs):\n    return sorted(xs, key=str)\n")
+        t = st.current(self.root, "S1")
+        t["size"] = "mid"
+        st.save(self.root, t)
+        sig = {"kind": "unrequested_option", "path": "src/list.py", "name": "요청에 없는 정렬 키 옵션"}
+        with mock.patch("vmc_harness.task.overdesign.spawn_llm"), \
+                mock.patch("vmc_harness.task.overdesign.read_llm", return_value={"status": "done", "signals": [sig]}):
+            r = handlers.on_stop(ctx(self.root, "Stop"))
+        self.assertFalse(r and r.block)
+        text = report.build(self.root, st.current(self.root, "S1"))["text"]
+        self.assertIn("요청 대비 확인", text)
+        self.assertIn("정렬 키 옵션", text)
+
     def test_out_of_scope_record_only(self):
         dec.declare(self.root, raw())
         self._edit("src/list.py", "a = 2\n")

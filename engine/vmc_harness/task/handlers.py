@@ -224,6 +224,9 @@ def on_stop(ctx):
                 signals += llm.get("signals") or []
         # 새 파일·모듈은 완료 보고(범위 밖 변경)로만, 무엇이 잡혔는지 말할 수 없는 신호(빈 지적)는 막지 않는다
         block = overdesign.shown(overdesign.blocking(signals))
+        notes = overdesign.shown([x for x in signals if x.get("kind") in overdesign.LLM_NOTE])
+        if notes:
+            od["notes"] = notes   # 완료 보고 "요청 대비 확인"(task.report) — 막지 않는다(현장 결함 C16)
         if block and _proceeded(ctx):
             od["reviewed"] = True   # 사람이 "그냥 진행"으로 넘긴 과설계 차단 — 다시 막지 않는다
             od["proceeded"] = True

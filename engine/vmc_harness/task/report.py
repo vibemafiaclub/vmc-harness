@@ -74,6 +74,10 @@ def build(root, task, allow_llm=False):
         lines.append("- %s: %s" % (o["path"], why))
     if len(oos) > cap:
         lines.append("- 외 %d건" % (len(oos) - cap))
+    notes = (task.get("overdesign") or {}).get("notes") or []
+    if notes:
+        from vmc_harness.task import overdesign
+        lines.append("요청 대비 확인(LLM 판정, 막지 않음): %s" % overdesign.describe(notes[:cap]).split(": ", 1)[-1])
     tm = test_modified(root, task, files)
     if tm:
         lines.append("기존 테스트 수정: %s" % ", ".join(tm[:cap]) + (" 외 %d개" % (len(tm) - cap) if len(tm) > cap else ""))
