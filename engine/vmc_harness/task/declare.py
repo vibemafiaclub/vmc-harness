@@ -6,7 +6,7 @@
 import time
 
 from vmc_harness.core import events, ids, inject
-from vmc_harness.core.clock import now_iso
+from vmc_harness.core.clock import now_iso, parse_iso
 from vmc_harness.core.mask import mask
 from vmc_harness.task import lifecycle, measure, scope, size as sizer, state as st
 
@@ -121,6 +121,36 @@ def same_task(root, prev, d, mode=None):
     return not prev.get("edits") or _overlap(root, prev.get("declare") or {}, d)
 
 
+def same_turn(root, prev, session_id):
+    """진행 중 작업이 시작된 뒤 사람 메시지가 없었는가 — 같은 사람 지시 안의 선언(서브에이전트 병렬·나눠 한 선언).
+    서브에이전트는 모두 한 사람 턴 안에서 일한다. 훅 입력의 서브에이전트 식별 없이 쓸 수 있는 경계다(현장 결함 C17)."""
+    if not session_id or not prev or prev.get("ended_at") or prev.get("session_id") != session_id:
+        return False
+    t0 = parse_iso(prev.get("started_at"))
+    lp = parse_iso((st.session_get(root, session_id) or {}).get("last_prompt_at"))
+    return t0 is not None and (lp is None or lp <= t0)
+
+
+def merge_parallel(old, new):
+    """같은 턴 안의 다른 선언을 진행 중 작업에 더한다 — 범위·새 파일·테스트 수정은 합치고, 하려는 것은 이어 붙이고,
+    예측은 더한다(실측이 합친 작업 전체라서)."""
+    out = dict(old)
+    intents = [x for x in (old.get("intent"), new.get("intent")) if x]
+    out["intent"] = " / ".join(dict.fromkeys(intents))
+    for k in ("scope", "new"):
+        out[k] = list(dict.fromkeys(list(old.get(k) or []) + list(new.get(k) or [])))
+    out["protected_touch"] = bool(old.get("protected_touch") or new.get("protected_touch"))
+    out["test_change"] = merge_test_change(old.get("test_change"), new.get("test_change"))
+    po, pn = old.get("predict") or {}, new.get("predict") or {}
+    pred = {}
+    for k in ("tokens", "agent_sec"):
+        a, b = po.get(k), pn.get(k)
+        pred[k] = {q: a[q] + b[q] for q in PCT} if (a and b) else (a or b)
+    out["predict"] = pred
+    out["approvals_expected"] = int(old.get("approvals_expected") or 0) + int(new.get("approvals_expected") or 0)
+    return out
+
+
 def merge_test_change(old, new):
     """같은 작업 재선언: 테스트 수정 허용 파일은 누적한다(현장 결함 C1). 이유는 다르면 이어 붙인다."""
     old = old or None
@@ -155,6 +185,12 @@ def declare(root, raw, session_id=None, agent=None, mode=None):
         prev = st.current(root, None)
     closed = None
     task = None
+    merged = False
+    if prev is not None and mode != "same" and not same_task(root, prev, d, mode) and same_turn(root, prev, session_id):
+        # 같은 사람 지시 안의 다른 선언 — 마감하지 않고 범위에 더한다. 한 에이전트의 --new-task가 다른 에이전트의 진행 중
+        # 작업을 마감하고, 그 작업의 편집이 범위 밖으로 표시됐다(현장 결함 C17)
+        d = merge_parallel(prev.get("declare") or {}, d)
+        mode, merged = "same", True
     if prev is not None:
         if same_task(root, prev, d, mode):
             task = prev
@@ -232,6 +268,8 @@ def declare(root, raw, session_id=None, agent=None, mode=None):
         if msg:
             lines.append(msg)
     lines.append("작업 %s · 크기 %s%s" % (task["task_id"], sz, "" if created else " · 선언 갱신(같은 작업)"))
+    if merged:
+        lines.append("같은 사람 지시 안의 선언 — 진행 중 작업 %s 범위에 더함(마감하지 않음)" % task["task_id"])
     if closed is not None:
         lines.append("이전 작업 %s 마감 — 같은 작업을 고쳐 선언한 것이면 --same-task" % closed["task_id"])
     task = st.by_id(root, task["task_id"]) or task
@@ -246,7 +284,8 @@ def declare(root, raw, session_id=None, agent=None, mode=None):
     lifecycle.publish(root, task, "open")
     if closed is not None:
         lifecycle.spawn_measure(root, closed["task_id"])
-    return {"task": task, "size": sz, "created": created, "lines": lines, "pm_mode": pm_mode, "closed": closed}
+    return {"task": task, "size": sz, "created": created, "lines": lines, "pm_mode": pm_mode, "closed": closed,
+            "merged": merged}
 
 
 def why_not_smaller(root, reason, session_id=None):

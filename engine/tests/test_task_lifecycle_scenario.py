@@ -122,7 +122,9 @@ class LifecycleScenarioTest(HarnessTestCase):
         self.clock(at(0, 9, 13))
         self.hook("Stop", "S1", stop_hook_active=False)
 
-        # 같은 세션 새 작업 B(범위 안 겹침) → A는 "새 선언"으로 마감
+        # 같은 세션 새 작업 B(범위 안 겹침, 사람의 새 지시 뒤) → A는 "새 선언"으로 마감
+        self.clock(at(0, 9, 19))
+        self.hook("UserPromptSubmit", "S1", prompt="가이드 문서도 고쳐 줘")
         self.clock(at(0, 9, 20))
         r = dec.declare(self.root, raw("가이드 문서 갱신", ["docs/guide.md"]), session_id="S1")
         b = r["task"]
@@ -247,6 +249,9 @@ class LifecycleScenarioTest(HarnessTestCase):
         self.clock(at(0, 9, 0))
         self.hook("SessionStart", "S3", source="startup")
         t1 = dec.declare(self.root, raw("a 수정", ["src/a.py"]), session_id="S3")["task"]
+        self.clock(at(0, 9, 1))
+        self.hook("UserPromptSubmit", "S3", prompt="다음 건")
+        self.clock(at(0, 9, 2))
         r = dec.declare(self.root, raw("a 수정 2", ["src/a.py"]), session_id="S3", mode="new")
         self.assertTrue(r["created"])
         self.assertEqual(r["closed"]["task_id"], t1["task_id"])
@@ -254,6 +259,26 @@ class LifecycleScenarioTest(HarnessTestCase):
         self.assertFalse(self.edit("S3", "src/a.py", "def a():\n    return 7\n"))
         r = dec.declare(self.root, raw("문서", ["docs/guide.md"]), session_id="S3", mode="same")
         self.assertEqual(r["task"]["task_id"], t2["task_id"])
+
+    def test_parallel_new_task_merges(self):
+        """같은 사람 지시 안의 선언(서브에이전트 병렬)은 진행 중 작업을 마감하지 않고 범위에 더한다(현장 결함 C17)."""
+        self.clock(at(0, 9, 0))
+        self.hook("SessionStart", "S4", source="startup")
+        self.hook("UserPromptSubmit", "S4", prompt="전부 고치자")
+        self.clock(at(0, 9, 1))
+        t1 = dec.declare(self.root, raw("a 수정", ["src/a.py"]), session_id="S4")["task"]
+        self.assertFalse(self.edit("S4", "src/a.py", "def a():\n    return 3\n"))
+        self.clock(at(0, 9, 2))
+        r = dec.declare(self.root, raw("가이드 갱신", ["docs/guide.md"]), session_id="S4", mode="new")
+        self.assertFalse(r["created"])
+        self.assertTrue(r["merged"])
+        self.assertIsNone(r["closed"])
+        self.assertEqual(r["task"]["task_id"], t1["task_id"])
+        self.assertEqual(r["task"]["declare"]["scope"], ["src/a.py", "docs/guide.md"])
+        self.assertIn("a 수정 / 가이드 갱신", r["task"]["declare"]["intent"])
+        self.assertFalse(self.edit("S4", "docs/guide.md", "# guide v3\n"))
+        from vmc_harness.task import scope
+        self.assertEqual(scope.out_of_scope(self.root, st.by_id(self.root, t1["task_id"])), [])
 
 
 class SnapshotTest(HarnessTestCase):
