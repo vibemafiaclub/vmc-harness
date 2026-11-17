@@ -90,7 +90,13 @@ def run(args):
             _print(m)
         elif kind in ("test_run", "test"):
             argv = [a for a in args.argv if a != "--"]
-            m = ev.test_run(root, tid, argv, target=args.target)
+            # 부른 폴더에서 돌린다 — 저장소 루트에서 돌려 하위 패키지의 상대 경로 테스트가 "판독 불가"로 나왔다(현장 결함 C13)
+            here = os.getcwd()
+            try:
+                inside = os.path.commonpath([os.path.realpath(here), os.path.realpath(str(root))]) == os.path.realpath(str(root))
+            except ValueError:   # Windows 다른 드라이브
+                inside = False
+            m = ev.test_run(root, tid, argv, target=args.target, cwd=here if inside else None)
             _print(m)
             if not ev.marker_ok(m):
                 data = ev.load_data(root, tid, m) or {}

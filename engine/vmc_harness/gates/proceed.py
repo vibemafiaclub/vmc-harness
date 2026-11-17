@@ -82,22 +82,33 @@ def _latest(st, gate=None):
 
 
 def from_prompt(ctx):
-    """UserPromptSubmit: 차단 직후 사람이 "그냥 진행"이라 했으면 finding + 1회 통과. 처리했으면 finding dict."""
+    """UserPromptSubmit: 차단 직후 사람이 "그냥 진행"이라 했으면 finding + 통과. 처리했으면 첫 finding dict.
+    창(gates.proceed_window_min) 안 이 세션의 진행 처리 안 된 받는 게이트 차단을 모두 푼다 — 가장 최근 1건만 풀면 그 사이 끼어든
+    다른 차단(종료 때 빠진 증거)이 허가를 가져가 막힌 편집은 계속 막혔다. 이 세션에 없으면(세션 재시작으로 id가 바뀜) 모든 세션 중
+    가장 최근 차단(현장 결함 C15)."""
     text = (ctx.prompt or "").strip().lower()
     if not text:
         return None
     phrases = [p.lower() for p in config.get("gates.proceed_phrases", ctx.root)]
     if not any(p in text for p in phrases):
         return None
-    b = state.last_block(ctx.root, ctx.session_id)
-    if not b or b.get("proceeded"):
-        return None
-    mins = state.minutes_since(b.get("at"))
-    if mins is None or mins > float(config.get("gates.proceed_window_min", ctx.root)):
-        return None
-    if not _allowed(b["gate"]):
-        return None
-    return grant(ctx.root, ctx.session_id, b, via="prompt")
+    win = float(config.get("gates.proceed_window_min", ctx.root))
+
+    def fresh(b):
+        mins = state.minutes_since(b.get("at"))
+        return (not b.get("proceeded")) and _allowed(b.get("gate")) and mins is not None and mins <= win
+
+    sid = ctx.session_id
+    todo = [b for b in state.load(ctx.root, sid).get("blocks") or [] if fresh(b)]
+    if not todo:
+        osid, b = latest_block(ctx.root)
+        if b and fresh(b):
+            sid, todo = osid, [b]
+    first = None
+    for b in todo:
+        f = grant(ctx.root, sid, b, via="prompt")
+        first = first or f
+    return first
 
 
 def unblock_hint(ctx, gate):

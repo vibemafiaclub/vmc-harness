@@ -46,6 +46,23 @@ class TestFileBypass(TaskMixin, GatesCase):
         self.assertDenied(self.hook("PreToolUse", "Edit", _edit(self.root, T, "    assert f() < 127  # docs/old.md\n", "")))
 
 
+class TestProceedCoversRecentBlocks(TaskMixin, GatesCase):
+    """그 사이 끼어든 다른 차단(종료 때 빠진 증거)이 "그냥 진행"을 가져가지 않는다 — 창 안 차단을 모두 푼다(현장 결함 C15)."""
+
+    def test_interleaved_completion_block(self):
+        self.write(T, "def test_a():\n    assert g()\n")
+        self.write("fe/pages/settle.tsx", "export const A = 1\n")
+        self.commit()
+        self.hook("SessionStart", source="startup")
+        self.set_task()
+        self.assertDenied(self.hook("PreToolUse", "Edit", _edit(self.root, T, "    assert g()\n", "")))
+        self.write("fe/pages/settle.tsx", "export const A = 2\n")
+        self.assertEqual(self.hook("Stop", stop_hook_active=False).get("decision"), "block")
+        self.hook("UserPromptSubmit", prompt="전부 다 그냥 진행")
+        self.assertAllowed(self.hook("PreToolUse", "Edit", _edit(self.root, T, "    assert g()\n", "")))
+        self.assertNotEqual(self.hook("Stop", stop_hook_active=False).get("decision"), "block")
+
+
 class TestFileBypassOpaque(TaskMixin, OpaqueCase):
     def test_shell_edit_after_proceed_not_reverted(self):
         self.write(T, "def test_a():\n    assert f() < 127\n    assert g()\n")

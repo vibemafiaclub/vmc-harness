@@ -74,6 +74,15 @@ class DbHandlersTest(HarnessTestCase):
             r = handlers.on_pre_tool(self.ctx(tool="Bash", command=cmd))
             self.assertTrue(r and r.block, cmd)
 
+    def test_secret_harness_prefix_not_exempt_whole_command(self):
+        """`vmc-harness …`로 시작해도 뒤 구간의 키체인 명령은 막는다(현장 결함 C14)."""
+        for cmd in ("vmc-harness declare --protected-touch x; security -i <<'E'\nfind-generic-password -s a -w\nE",
+                    "vmc-harness db-credential --show && security find-generic-password -s a -w",
+                    "vmc-harness finding $(security find-generic-password -s a -w)"):
+            r = handlers.on_pre_tool(self.ctx(tool="Bash", command=cmd))
+            self.assertTrue(r and r.block, cmd)
+        self.assertIsNone(handlers.on_pre_tool(self.ctx(tool="Bash", command="vmc-harness db-credential --show; ls")))
+
     def test_session_start_never_raises(self):
         ctx = HookContext(event="SessionStart", agent="claude", raw={}, root=str(self.root))
         self.assertIsNone(handlers.on_session_start(ctx))

@@ -74,9 +74,26 @@ def sql_write_violation(root, write_paths, command=None):
     return None
 
 
+_SEGMENT = re.compile(r"&&|\|\||[;|\n&]")
+
+
+def _secret_cmd(cmd):
+    """명령 구간마다 본다 — vmc-harness 자신의 명령 구간만 뺀다. 옛 판정은 명령 전체가 `vmc-harness`로 시작하면 통째로 빼서
+    `vmc-harness declare …; security -i …`가 통과했다(현장 결함 C14). vmc-harness 구간이라도 명령 치환이 있으면 본다."""
+    if not _SECRET_CMD.search(cmd):
+        return False
+    for seg in _SEGMENT.split(cmd):
+        if not _SECRET_CMD.search(seg):
+            continue
+        if re.match(r"^\s*vmc-harness(\.exe)?\b", seg) and "$(" not in seg and "`" not in seg:
+            continue
+        return True
+    return False
+
+
 def secret_access_violation(ctx):
     cmd = ctx.command or ""
-    if cmd and _SECRET_CMD.search(cmd) and not re.match(r"^\s*vmc-harness\b", cmd):
+    if cmd and _secret_cmd(cmd):
         return "하네스 비밀값·DB 접속 정보 직접 접근 차단됨"
     ti = ctx.tool_input or {}
     for key in ("file_path", "path", "notebook_path"):
