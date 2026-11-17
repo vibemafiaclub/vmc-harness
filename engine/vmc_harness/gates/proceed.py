@@ -47,16 +47,18 @@ def grant(root, session_id, block, via):
     return f
 
 
-def dispute(root, session_id, reason):
-    """에이전트가 근거를 대고 "잘못 막았다"고 한 것 — 참고 지표. 통과·finding 없음. 표시한 차단을 돌려준다."""
+def dispute(root, session_id, reason, gate=None):
+    """에이전트가 근거를 대고 "잘못 막았다"고 한 것 — 참고 지표. 통과·finding 없음. 표시한 차단을 돌려준다.
+    대상은 가장 최근 차단(gate를 주면 그 게이트의 가장 최근 차단) — 사람이 이미 "그냥 진행"한 차단도 포함한다.
+    진행 처리된 차단을 건너뛰면 방금 넘긴 과설계 차단에 대한 반박이 그 앞의 다른 게이트 차단에 붙었다(현장 결함 C11)."""
     reason = " ".join((reason or "").split())
     if not reason:
         raise ProceedError("반박 근거 한 줄이 필요함")
     reason = reason[:int(config.get("gates.dispute_reason_max", root))]
     if session_id:
-        sid, b = session_id, _undisputed(state.load(root, session_id))
+        sid, b = session_id, _latest(state.load(root, session_id), gate)
     else:
-        sid, b = latest_block(root)
+        sid, b = latest_block(root, gate=gate, include_proceeded=True)
     if not b:
         raise ProceedError("반박할 차단 없음")
     if b.get("disputed"):
@@ -72,9 +74,9 @@ def dispute(root, session_id, reason):
     return b
 
 
-def _undisputed(st):
+def _latest(st, gate=None):
     for b in reversed(st.get("blocks") or []):
-        if not b.get("proceeded"):
+        if gate is None or b.get("gate") == gate:
             return b
     return None
 
@@ -99,7 +101,8 @@ def from_prompt(ctx):
 
 
 def unblock_hint(ctx, gate):
-    """막은 사유 끝에 붙이는 사람용 한 줄 — 사람이 대화로 풀 수 있는 차단일 때만(에이전트는 그대로 전한다). 아니면 None.
+    """막은 사유 끝에 붙이는 한 줄 — 사람이 대화로 풀 수 있는 차단이면 사람에게 전할 문장, 에이전트가 풀 수 없는 차단(gates.human_only)이면
+    그 사실(무엇을 어겼는지의 성질 — 해결 지시 아님, 01 P6). 아니면 None.
     PreToolUse·Stop만: 실행 뒤 되돌림(PostToolUse)은 "그냥 진행"이 다음 호출을 통과시키지 못한다."""
     if ctx.event not in ("PreToolUse", "Stop") or not gate:
         return None
@@ -108,16 +111,19 @@ def unblock_hint(ctx, gate):
             return None
         phrase = config.get("gates.approve_phrases", ctx.root)[0]
         return "사람에게 이 문장을 그대로 전한다: \"이 설정 변경을 허락하면 대화창에 '%s'이라고만 답해 주세요.\"" % phrase
+    if gate in config.get("gates.human_only", ctx.root):
+        return "에이전트가 풀 수 없는 차단(사람만 풀 수 있음)"
     if gate in config.get("gates.proceed_allowed", ctx.root):
         phrase = config.get("gates.proceed_phrases", ctx.root)[0]
-        return ("사람에게 이 문장을 그대로 전한다: \"잘못 막은 것이면 대화창에 '%s'이라고 답해 주세요. 이번 한 번 통과됩니다.\" "
+        scope = "이 작업이 끝날 때까지 그 파일은 통과됩니다" if gate == "tamper" else "이번 한 번 통과됩니다"
+        return ("사람에게 이 문장을 그대로 전한다: \"잘못 막은 것이면 대화창에 '%s'이라고 답해 주세요. %s.\" "
                 "잘못 막았다고 볼 근거가 있으면 `vmc-harness proceed --dispute \"<근거 한 줄>\"`로 남긴다"
-                "(참고 지표 — 통과되지 않는다)" % phrase)
+                "(참고 지표 — 통과되지 않는다)" % (phrase, scope))
     return None
 
 
-def latest_block(root):
-    """모든 세션 중 가장 최근 차단 (session_id, block)."""
+def latest_block(root, gate=None, include_proceeded=False):
+    """모든 세션 중 가장 최근 차단 (session_id, block). 기본은 아직 진행 처리되지 않은 것만."""
     d = paths.cache_dir(root) / "gates"
     best = (None, None)
     if not d.is_dir():
@@ -125,7 +131,7 @@ def latest_block(root):
     for f in d.glob("session-*.json"):
         st = read_json(f, None) or {}
         for b in st.get("blocks") or []:
-            if b.get("proceeded"):
+            if (b.get("proceeded") and not include_proceeded) or (gate is not None and b.get("gate") != gate):
                 continue
             if best[1] is None or (b.get("at") or "") > (best[1].get("at") or ""):
                 best = (f.stem[len("session-"):], b)

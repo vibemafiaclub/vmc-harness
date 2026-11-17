@@ -49,3 +49,14 @@ class TestUnblockHint(TaskMixin, GatesCase):
         self.assertDenied(out)
         self.assertNotIn("그냥 진행", _reason(out))
         self.assertNotIn("승인", _reason(out))
+
+    def test_human_only_gate_says_so(self):
+        """에이전트가 풀 수 없는 차단은 그 사실을 사유에 싣는다(gates.human_only — 현장 결함 C8)."""
+        from vmc_harness.hooks.contract import HANDLER_MODULES
+        out = self.hook("PreToolUse", "Bash", {"command": "security find-generic-password -s x -w"},
+                        modules=HANDLER_MODULES[:2])
+        self.assertDenied(out)
+        r = _reason(out)
+        self.assertIn("에이전트가 풀 수 없는 차단", r)
+        self.assertIn("비밀값", r)
+        self.assertTrue(dispatcher.valid_message(r, False)[0], r)

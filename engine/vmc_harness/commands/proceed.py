@@ -15,6 +15,7 @@ def register(sub):
     p = sub.add_parser("proceed", help="게이트가 잘못 막았을 때 그냥 진행(헛막기 기록)")
     p.add_argument("--session", help="세션 id(없으면 환경변수 → 가장 최근 차단)")
     p.add_argument("--dispute", metavar="근거", help="잘못 막았다는 근거 한 줄 — 참고 지표로만 남는다(통과되지 않음, 에이전트도 사용 가능)")
+    p.add_argument("--gate", help="반박할 차단의 게이트 이름(없으면 가장 최근 차단)")
     p.set_defaults(func=run)
 
 
@@ -27,7 +28,7 @@ def run(args):
     if args.dispute is not None:
         from vmc_harness.task import state as tstate
         try:
-            b = proceed.dispute(root, args.session or tstate.env_session_id(), args.dispute)
+            b = proceed.dispute(root, args.session or tstate.env_session_id(), args.dispute, gate=args.gate)
         except proceed.ProceedError as e:
             print("반박 못 남김: %s" % e, file=sys.stderr)
             return 1
@@ -38,5 +39,5 @@ def run(args):
     except proceed.ProceedError as e:
         print("진행 못 함: %s" % e, file=sys.stderr)
         return 1
-    print("그냥 진행으로 기록했어요(%s). 같은 작업을 다시 시키면 이번 한 번은 통과해요." % f["finding_id"])
+    print("그냥 진행으로 기록했어요(%s). 같은 작업을 다시 시키면 통과해요(검증물 변조는 이 작업이 끝날 때까지 그 파일, 다른 게이트는 한 번)." % f["finding_id"])
     return 0

@@ -44,6 +44,11 @@ def _blocked(ctx, gate, result, gate_id=None):
     return result
 
 
+def blocked(ctx, gate, result, gate_id=None):
+    """다른 영역(db·qa) 차단도 같은 기록(차단 목록·gate_block·알림)을 남긴다 — 기록이 없으면 why·"그냥 진행"·헛막기 집계가 그 차단을 못 본다(현장 결함 C8)."""
+    return _blocked(ctx, gate, result, gate_id=gate_id)
+
+
 def _meta_key(viol):
     body = json.dumps(sorted(v["text"] for v in viol), ensure_ascii=False)
     return "meta_stop:%s" % hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
@@ -158,7 +163,7 @@ def on_pre_tool(ctx):
         r.notice = _card_notice(ctx.root, ctx.state.get("approval_created")) or (declared.notice if declared else None)
         return r
     r = tamper.check(ctx, task)
-    if r and not state.consume_bypass(ctx.root, ctx, tamper.NAME):
+    if r and not state.file_bypassed(ctx.root, ctx, tamper.NAME, ctx.state.get("block_paths"), task):
         return _blocked(ctx, tamper.NAME, r)
     return None
 

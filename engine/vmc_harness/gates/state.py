@@ -37,7 +37,9 @@ def record_block(root, ctx, gate, reason, gate_id=None):
     ctx.state["recorded_block_gate"] = gate   # 디스패처가 사람에게 전할 풀기 한 줄을 고른다(gates.proceed.unblock_hint)
     st = load(root, ctx.session_id)
     st["blocks"].append({"gate": gate, "gate_id": gate_id, "at": now_iso(), "fingerprint": fingerprint(ctx),
-                         "event": ctx.event, "reason": reason, "proceeded": False})
+                         "event": ctx.event, "reason": reason, "proceeded": False,
+                         "paths": [p for p in (ctx.state.get("block_paths") or []) if isinstance(p, str)],
+                         "task": task_key(root, ctx.session_id, ctx.task_id if isinstance(ctx.task_id, str) else None)})
     st["blocks"] = st["blocks"][-_keep():]
     save(root, ctx.session_id, st)
 
@@ -55,7 +57,8 @@ def last_block(root, session_id):
 def grant_bypass(root, session_id, block):
     st = load(root, session_id)
     st["bypass"].append({"gate": block["gate"], "gate_id": block.get("gate_id"),
-                         "fingerprint": block["fingerprint"], "event": block.get("event"), "at": now_iso()})
+                         "fingerprint": block["fingerprint"], "event": block.get("event"), "at": now_iso(),
+                         "paths": list(block.get("paths") or []), "task": block.get("task")})
     for b in st["blocks"]:
         if b["at"] == block["at"] and b["fingerprint"] == block["fingerprint"]:
             b["proceeded"] = True
@@ -81,6 +84,20 @@ def consume_bypass(root, ctx, gate, gate_id=None):
         if b["fingerprint"] == fp or (gate == "completion" and ctx.event == "Stop"):
             st["bypass"].pop(i)
             save(root, ctx.session_id, st)
+            return True
+    return False
+
+
+def file_bypassed(root, ctx, gate, rels, task=None):
+    """"그냥 진행"이 그 파일들을 이 작업이 끝날 때까지 허용했는가 — 호출 1회가 아니라 (게이트, 파일, 작업) 단위.
+    1회 통과는 같은 작업의 같은 파일 두 번째 수정(래칫 값 다음 주석 한 줄)에서 다시 막혔고, 게이트 단위로 소비돼
+    다른 파일의 차단이 허가를 가져갔다(현장 결함 C9). 소비하지 않는다."""
+    rels = set(r for r in rels or [] if r)
+    if not rels:
+        return False
+    key = task_key(root, ctx.session_id, (task or {}).get("task_id") or ctx.task_id)
+    for b in load(root, ctx.session_id).get("bypass") or []:
+        if b.get("gate") == gate and b.get("paths") and b.get("task") == key and rels <= set(b["paths"]):
             return True
     return False
 

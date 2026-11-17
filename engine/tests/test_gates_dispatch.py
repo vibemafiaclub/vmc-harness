@@ -173,6 +173,8 @@ class TestInjectFilter(GatesCase):
             out = self.hook("PreToolUse", "Bash", {"command": "ls"}, modules=[("vmh_test_forge", True)])
         self.assertDenied(out)
         self.assertNotIn("120", out["hookSpecificOutput"]["permissionDecisionReason"])
+        # 사유를 못 실어도 규칙(막은 모듈) 이름은 남는다(현장 결함 C8)
+        self.assertIn("규칙: vmh_test_forge", out["hookSpecificOutput"]["permissionDecisionReason"])
 
 
 if __name__ == "__main__":

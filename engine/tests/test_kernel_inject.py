@@ -14,6 +14,10 @@ REQUIRED = [
 ]
 
 
+# 변수로 넘기는 사유가 바로 위에서 inject.message()로 만들어지는 곳(파일 단위 허용 — 새 곳은 inject.message() 호출을 그 자리에)
+ALLOWED_NAME_REASON = {"gates": ("common.py",), "task": ("handlers.py",)}
+
+
 class KernelInjectRefTest(unittest.TestCase):
     def test_kernel_inject_tests_exist(self):
         missing = []
@@ -24,6 +28,28 @@ class KernelInjectRefTest(unittest.TestCase):
             if not found:
                 missing.append("%s.%s" % (mod, name))
         self.assertEqual(missing, [], "01 P5 커널 테스트가 없어졌다")
+
+    def test_block_reasons_built_by_inject(self):
+        """막는 결과(HookResult(block=True))의 사유는 core.inject.message()나 그걸 쓰는 gates.common.block()으로만 만든다.
+        꼬리표 없는 사유는 디스패처가 고정 문구로 바꿔 무엇을 어겼는지가 사라진다(현장 결함 C8 — db·qa 차단 7건)."""
+        import ast
+        from pathlib import Path
+        import vmc_harness
+        bad = []
+        for f in Path(vmc_harness.__file__).parent.rglob("*.py"):
+            tree = ast.parse(f.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not (isinstance(node, ast.Call) and getattr(node.func, "id", None) == "HookResult"):
+                    continue
+                kw = {k.arg: k.value for k in node.keywords}
+                if not (isinstance(kw.get("block"), ast.Constant) and kw["block"].value is True):
+                    continue
+                r = kw.get("reason")
+                ok = (isinstance(r, ast.Call) and getattr(r.func, "attr", None) == "message") or (
+                    isinstance(r, ast.Name) and f.name in ALLOWED_NAME_REASON.get(f.parent.name, ()))
+                if not ok:
+                    bad.append("%s:%d" % (f.relative_to(Path(vmc_harness.__file__).parent), node.lineno))
+        self.assertEqual(bad, [], "막는 사유를 inject.message()로 만들지 않은 곳")
 
     def test_allowlist_is_spec_list(self):
         from vmc_harness.core import inject

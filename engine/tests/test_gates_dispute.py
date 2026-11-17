@@ -65,6 +65,19 @@ class TestDispute(TaskMixin, GatesCase):
         self.assertEqual(len([f for f in ledger.list_findings(self.root) if f.get("kind") == "false_block"]), 1)
         self.assertAllowed(self.hook("PreToolUse", "Edit", dict(EDIT, file_path=str(self.root / "tests/test_calc.py"))))
 
+    def test_dispute_targets_latest_block_even_if_proceeded(self):
+        """사람이 방금 "그냥 진행"한 차단에 대한 반박이 그 앞의 다른 게이트 차단에 붙지 않는다(현장 결함 C11)."""
+        self._block()
+        st = state.load(self.root, self.session)
+        st["blocks"].append({"gate": "overdesign", "gate_id": "kernel:overdesign", "at": "2999-01-01T00:00:00+00:00",
+                             "fingerprint": "x", "event": "Stop", "reason": "r", "proceeded": True})
+        state.save(self.root, self.session, st)
+        with __import__("unittest").mock.patch("vmc_harness.gates.state.minutes_since", lambda iso: 0.0):
+            b = proceed.dispute(self.root, self.session, "근거")
+            self.assertEqual(b["gate"], "overdesign")
+            b = proceed.dispute(self.root, self.session, "근거2", gate="tamper")
+            self.assertEqual(b["gate"], "tamper")
+
     def test_not_allowed_gate_cannot_be_disputed(self):
         out = self.hook("PreToolUse", "Write", {"file_path": str(self.root / ".harness/ledger/x.json"), "content": "{}"})
         self.assertDenied(out)

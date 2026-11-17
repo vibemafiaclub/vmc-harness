@@ -483,12 +483,16 @@ def check(ctx, task):
         from vmc_harness.gates import tamper
         existed = tamper._existing(root, ctx, task)
         hit = [r for r in ver if existed(r) and not (ch[r]["kind"] == "modify" and _additive_after(root, rec, r))]
-        bad = [r for r in hit if not tamper._declared(task, r)]
+        from vmc_harness.gates import state as gstate
+        # "그냥 진행"으로 이 작업에서 허용된 파일은 실행 뒤에도 되돌리지 않는다 — 허가를 받은 뒤에도 셸로 고친 테스트가
+        # 되돌려졌다(현장 결함 C9)
+        bad = [r for r in hit if not tamper._declared(task, r) and not gstate.file_bypassed(root, ctx, tamper.NAME, [r], task)]
         if hit and not bad:
             from vmc_harness.gates.common import log_event
             log_event(root, "test_change_used", task_id=(task or {}).get("task_id"), files=hit)
         if bad:
             revert |= set(bad)
+            ctx.state["block_paths"] = bad
             results.append((tamper.NAME, block(
                 "검증물 변조 금지: 해석 못 한 셸 명령이 기존 검증물을 바꿔 되돌림 (%s)" % short_list(bad),
                 "검증물 변조 금지: 해석 못 한 셸 명령이 기존 테스트·기대값을 바꿔 되돌림")))

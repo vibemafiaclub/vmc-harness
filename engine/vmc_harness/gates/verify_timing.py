@@ -54,7 +54,8 @@ TOOLS = {
 CHECK_ONLY = {"black": "lint", "prettier": "lint", "isort": "lint"}   # --check일 때만(아니면 고치기 명령)
 CUSTOMER_HOOKS = ("pre-commit", "commit-msg", "prepare-commit-msg", "post-commit", "pre-merge-commit")
 PREFILTER = set(TOOLS) | set(CHECK_ONLY) | PM | set(WRAPPERS) | {"make", "git", "tsc", "gradlew", "mvnw", "bash", "sh",
-                                                                 "pwsh", "powershell", "cmd", "zsh", "node", "env"}
+                                                                 "pwsh", "powershell", "cmd", "zsh", "node", "env",
+                                                                 "tsx", "deno"}
 
 
 # ---------------------------------------------------------------- 판별
@@ -157,6 +158,12 @@ def _segment(root, cmd, args, entries):
         if na and os.path.basename(na[0]) == "manage.py" and na[1:2] == ["test"]:
             return "test", "manage.py test", "pattern"
         return _script(na[0], entries) if na else None
+    if cmd in ("node", "tsx") and "--test" in args:
+        # 내장 테스트 러너(node:test) — `node --import tsx --test …`가 테스트로 안 잡혀 통과한 단위 테스트가 자동 증거가 되지
+        # 않았다(현장 결함 C10). --test 플래그가 있을 때만(스크립트 실행은 아래 facts 판정)
+        return "test", "%s --test" % cmd, "pattern"
+    if cmd == "deno" and args[:1] == ["test"]:
+        return "test", "deno test", "pattern"
     if cmd in ("bash", "sh", "zsh", "node", "pwsh", "powershell"):
         na = [a for a in args if not a.startswith("-")]
         return _script(na[0], entries) if na else None

@@ -46,6 +46,8 @@ tamper_skip_patterns = [".skip(", ".only(", ".todo(", "xit(", "xdescribe(", "xte
 
 # "그냥 진행"을 받는 게이트(엔진 쓰기 보호·DB 직접 접속 실행은 받지 않는다. 보호 영역·메타 게이트 풀기는 승인 카드로)
 proceed_allowed = ["completion", "tamper", "generated", "prod_config", "overdesign", "db_text"]  # unit=list md=no spec=00 — prod_config(운영 접속 설정)는 이름·내용 추정이라 오탐 탈출구를 둔다. overdesign(과설계 Stop 차단)도 차단 기록에 남아 proceed 대상. db_text는 실행하지 않는 문자열(echo·JSON 페이로드·heredoc 데이터·해석 실패한 명령 원문)에 SQL 접속 흔적만 보여 막은 경우 — 실제 DB 도구·드라이버 실행(db_direct)은 받지 않는다
+# 에이전트가 풀 수 없는 차단 — 사유 끝에 그 사실 한 줄(무엇을 어겼는지의 성질, 해결 지시 아님 01 P6). 에이전트가 우회할지 사람에게 넘길지 가를 근거(현장 결함 C8)
+human_only = ["engine_write_guard", "db_direct", "secret"]  # unit=list md=no spec=02
 
 # 사람 명시 요청 → 게이트 본체 생성(LLM이 목표·참고 자료·제약·출력 형식만 받아 쓴다, 01 P6)
 generate_model = "sonnet"        # unit=name md=yes spec=02

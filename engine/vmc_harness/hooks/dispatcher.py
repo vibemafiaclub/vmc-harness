@@ -114,10 +114,30 @@ def filter_result(ctx, result):
         ok, kind = valid_message(result.reason, False)
         if not ok:
             dropped.append("reason:%s" % (kind or "untagged"))
-            result.reason = inject.message("gate_violation", "하네스 게이트가 막음")
+            result.reason = inject.message("gate_violation", generic_reason(ctx))
     if dropped:
-        _log(ctx, "inject_dropped", event=ctx.event, kinds=dropped)
+        _log(ctx, "inject_dropped", event=ctx.event, kinds=dropped, blocked_by=ctx.state.get("blocked_by"),
+             gate=ctx.state.get("recorded_block_gate"))
     return result
+
+
+GENERIC_REASON = "하네스 게이트가 막음"
+
+
+def generic_reason(ctx):
+    """사유를 못 싣는 차단(허용 목록 밖 문구)의 고정 문구 — 규칙 이름은 남긴다. 이름이 없으면 무엇을 어겼는지 알 길이 없어
+    에이전트·사람이 우회할지 넘길지 정하지 못했다(현장 결함 C8)."""
+    rule = ctx.state.get("recorded_block_gate") or ctx.state.get("blocked_by") or ""
+    rule = rule[len("vmc_harness."):] if rule.startswith("vmc_harness.") else rule
+    return ("%s(규칙: %s)" % (GENERIC_REASON, rule)) if rule and inject.message("gate_violation", rule) else GENERIC_REASON
+
+
+def _name_generic(ctx, reason):
+    """핸들러가 이름 없는 고정 문구로 막았으면(gates.common.block 대체) 규칙 이름을 붙인다."""
+    m = _TAG.match(reason or "")
+    if m and m.group(2) == GENERIC_REASON:
+        return inject.message(m.group(1), generic_reason(ctx)) or reason
+    return reason
 
 
 def _with_unblock_hint(ctx, reason):
@@ -230,7 +250,7 @@ def dispatch(event, agent_arg, stdin_text, modules=None, cwd=None):
         pass
     result, timings = run(ctx, modules)
     if result.block:
-        result.reason = _with_unblock_hint(ctx, result.reason)
+        result.reason = _with_unblock_hint(ctx, _name_generic(ctx, result.reason))
     result = filter_result(ctx, result)
     _verify_timing(ctx, event, result)
     total_ms = (time.time() - t0) * 1000.0

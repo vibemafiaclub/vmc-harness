@@ -9,8 +9,6 @@
 import json
 from pathlib import Path
 
-from vmc_harness.core import inject
-
 SCENARIO_PREFIX = ".harness/qa/scenarios/"
 POLICY_REL = ".harness/qa/data-policy.json"
 
@@ -38,10 +36,17 @@ def _new_content(root, rel, ctx):
     return None
 
 
-def _block(reason):
-    from vmc_harness.hooks.contract import HookResult
-    msg = inject.message("gate_violation", reason)
-    return HookResult(block=True, reason=reason, inject=[msg] if msg else [])
+QA_GATE = "qa"
+
+
+def _block(reason, ctx=None):
+    """사유는 허용 목록 문구로(01 P5), 차단 기록은 커널 게이트와 같게(현장 결함 C8 — 꼬리표 없는 사유는 이름 없는 고정 문구가 됐다)."""
+    from vmc_harness.gates.common import block
+    r = block(reason, "QA 범위 검사 위반")
+    if ctx is None:
+        return r
+    from vmc_harness.gates.handlers import blocked
+    return blocked(ctx, QA_GATE, r)
 
 
 def on_pre_tool(ctx):
@@ -56,32 +61,32 @@ def on_pre_tool(ctx):
             content = _new_content(root, rel, ctx)
             if content is None:
                 if ctx.tool_name in ("Bash", "apply_patch"):
-                    return _block("시나리오 파일은 출처 검사를 거쳐야 함(셸·패치 쓰기)")
+                    return _block("시나리오 파일은 출처 검사를 거쳐야 함(셸·패치 쓰기)", ctx)
                 continue
             ok, reason = scenarios.check_write(root, rel, content)
             if not ok:
-                return _block(reason)
+                return _block(reason, ctx)
         if rel == POLICY_REL:
             content = _new_content(root, rel, ctx)
             if content is None:
-                return _block("데이터 범위 설정은 셸·패치로 쓸 수 없음")
+                return _block("데이터 범위 설정은 셸·패치로 쓸 수 없음", ctx)
             try:
                 new = json.loads(content)
             except ValueError:
-                return _block("데이터 범위 설정 JSON 형식 오류")
+                return _block("데이터 범위 설정 JSON 형식 오류", ctx)
             wide, why = policy.is_widening(policy.load(root), new)
             if wide:
-                return _block("데이터 범위 넓히기(%s)는 사람 확인 대상" % why)
+                return _block("데이터 범위 넓히기(%s)는 사람 확인 대상" % why, ctx)
     if not runner.active(root):
         return None
     pol = policy.load(root) or dict(policy.DEFAULT_POLICY)
     if ctx.command:
         ok, reason = policy.check_write(root, {"kind": "command", "command": ctx.command}, pol)
         if not ok:
-            return _block(reason)
+            return _block(reason, ctx)
     url = (ctx.tool_input or {}).get("url")
     if isinstance(url, str) and url.startswith(("http://", "https://")):
         ok, reason = policy.check_write(root, {"kind": "url", "url": url}, pol)
         if not ok:
-            return _block(reason)
+            return _block(reason, ctx)
     return None

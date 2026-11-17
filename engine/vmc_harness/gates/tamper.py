@@ -202,6 +202,7 @@ def check(ctx, task):
     if not hits:
         return None
     blocked = [h for h in hits if not _declared(task, h)]
+    ctx.state["block_paths"] = blocked   # "그냥 진행"이 이 파일들을 작업 끝까지 허용(gates.state.file_bypassed)
     if not blocked:
         try:
             log_event(ctx.root, "test_change_used", task_id=(task or {}).get("task_id"), files=hits)

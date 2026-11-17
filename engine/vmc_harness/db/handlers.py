@@ -24,7 +24,8 @@ _SHELL_TARGETS = [
     re.compile(r"(?i)\b(?:cp|mv|copy|move|copy-item|move-item|rename-item|ren)\b[^;|&]*\s(['\"]?)([^\s'\";|&]+\.sql)\1\s*(?:$|[;|&])"),
     re.compile(r"(?i)\bsed\s+-i\S*\s+[^;|&]*\s(['\"]?)([^\s'\";|&]+\.sql)\1"),
 ]
-_SECRET_CMD = re.compile(r"(?i)(find-generic-password|dump-keychain|export\s+.*keychain|get-storedcredential|credread"
+# 키체인 내보내기는 `security export` 명령만 — 옛 `export\s+.*keychain`은 한 줄의 다른 명령(`grep "export type"; grep keychain`)까지 이어 잡았다(현장 결함 C8)
+_SECRET_CMD = re.compile(r"(?i)(find-generic-password|dump-keychain|\bsecurity\s+export\b|get-storedcredential|credread"
                          r"|\.vmc-harness[\\/]+secrets|\.vmc-harness[\\/]+projects[\\/]+[^\s'\"]+[\\/]+db(-facts)?\.json)")
 _SECRET_PATH = re.compile(r"(?i)\.vmc-harness[\\/]+(secrets([\\/]|$)|projects[\\/]+[^\\/]+[\\/]+db\.json$)")
 
@@ -91,12 +92,20 @@ def secret_access_violation(ctx):
 def on_pre_tool(ctx):
     if not ctx.root:
         return None
-    msg = secret_access_violation(ctx)
+    gate, msg = SECRET, secret_access_violation(ctx)
     if not msg:
-        msg = sql_write_violation(ctx.root, ctx.write_paths, ctx.command)
+        gate, msg = SQL_WRITE, sql_write_violation(ctx.root, ctx.write_paths, ctx.command)
     if msg:
-        return HookResult(block=True, reason=msg)
+        # 사유는 허용 목록 문구로(01 P5) — 꼬리표 없는 사유는 디스패처가 이름 없는 고정 문구로 바꿔 무엇을 어겼는지 사라졌다(현장 결함 C8)
+        from vmc_harness.gates.common import block
+        from vmc_harness.gates.handlers import blocked
+        fallback = "SQL 파일 쓰기 위치 위반" if gate == SQL_WRITE else None
+        return blocked(ctx, gate, block(msg, fallback))
     return None
+
+
+SECRET = "secret"         # 하네스 비밀값·DB 접속 정보 직접 접근(gates.human_only — 에이전트가 풀 수 없다)
+SQL_WRITE = "sql_write"   # 패치 폴더 밖 SQL 쓰기
 
 
 def on_session_start(ctx):

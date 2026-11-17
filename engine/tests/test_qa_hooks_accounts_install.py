@@ -20,7 +20,7 @@ class HooksTest(HarnessTestCase):
         r = handlers.on_pre_tool(ctx(self.root, "Write", [".harness/qa/scenarios/x.json"], {"content": json.dumps(bad)}))
         self.assertTrue(r and r.block)
         self.assertIn("출처 없음", r.reason)
-        self.assertTrue(r.inject and r.inject[0].startswith("[vmc-harness:gate_violation]"))
+        self.assertTrue(r.reason.startswith("[vmc-harness:gate_violation]"))  # 사유 자체가 허용 목록 문구(현장 결함 C8)
         good = {"id": "x", "expectations": [{"text": "보인다", "source": {"type": "current_behavior", "ref": "a.py::f"}}]}
         r = handlers.on_pre_tool(ctx(self.root, "Write", [".harness/qa/scenarios/x.json"], {"content": json.dumps(good)}))
         self.assertIsNone(r)

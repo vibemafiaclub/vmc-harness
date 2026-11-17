@@ -45,6 +45,13 @@ class VerifyClassifyTest(GatesCase):
         self.assertIsNone(self.g("npm run foo"))          # 이름으로 모르는 스크립트
         self.assertIsNone(self.g("echo test && ls"))
         self.assertEqual(self.g("npm run lint && npm test"), (["lint", "test"], "npm run lint + npm test"))
+        # 내장 테스트 러너(현장 결함 C10 — node:test 단위 테스트가 자동 증거가 되지 않았다)
+        self.assertEqual(self.g("node --import tsx --import ./src/setup.ts --test src/a.test.ts"), (["test"], "node --test"))
+        self.assertEqual(self.g("cd apps/x && node --test"), (["test"], "node --test"))
+        self.assertEqual(self.g("npx tsx --test a.test.ts"), (["test"], "tsx --test"))
+        self.assertEqual(self.g("deno test -A"), (["test"], "deno test"))
+        self.assertIsNone(self.g("node scripts/build.js"))   # --test 없는 스크립트 실행은 facts로만
+        self.assertIsNone(self.g("deno run main.ts"))
 
     def test_facts_first(self):
         _facts(self.root, [_cmd("check", "test"), _cmd("test", "other"), _cmd("verify-all", "lint", "Makefile", "make verify-all"),
