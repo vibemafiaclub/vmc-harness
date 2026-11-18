@@ -75,29 +75,10 @@ def claude_agent(prompt, model, system=None, timeout=900, tools=("Read", "Grep",
     --permission-mode dontAsk → allowed 밖 호출은 자동 거부(읽기 전용 유지).
     {'text','tokens','sec','cost_usd','turns'} 또는 None.
     """
-    exe = shutil.which("claude")
-    if not exe:
+    built = _agent_args(prompt, model, system, tools, allowed, add_dirs, env_extra, "json")
+    if not built:
         return None
-    model = os.environ.get("VMC_HARNESS_EVAL_MODEL") or model
-    args = [exe, "-p", "--model", model, "--output-format", "json",
-            "--setting-sources", "", "--strict-mcp-config", "--no-session-persistence",
-            "--permission-mode", "dontAsk", "--tools", ",".join(tools)]
-    if allowed:
-        args += ["--allowedTools"] + list(allowed)
-    args += ["--disallowedTools", "Edit", "Write", "NotebookEdit", "MultiEdit"]
-    for d in add_dirs or []:
-        args += ["--add-dir", str(d)]
-    if system:
-        # Windows: 한글·따옴표·줄바꿈이 든 긴 지시문을 명령줄 인자로 넘기면 claude가 깨진 채 받는 것으로 보인다
-        # (실기 검증 2026-10-30 — 맥에서 4/4 찾는 카드를 Windows에선 못 찾음). 표준 입력 앞에 붙여 보낸다.
-        how = os.environ.get("VMC_HARNESS_LLM_SYSTEM") or ("stdin" if sys.platform == "win32" else "arg")
-        if how == "stdin":
-            prompt = system + "\n\n---\n\n" + (prompt or "")
-        else:
-            args += ["--system-prompt", system]
-    env = dict(os.environ)
-    env["VMC_HARNESS_NESTED"] = "1"
-    env.update(env_extra or {})
+    args, prompt, env = built
     import time
     t0 = time.time()
     rc, out, err = run(args, input_text=prompt, timeout=timeout, env=env, cwd=cwd)
@@ -116,3 +97,101 @@ def claude_agent(prompt, model, system=None, timeout=900, tools=("Read", "Grep",
     return {"text": (data.get("result") or "").strip(), "tokens": tokens, "sec": sec,
             "cost_usd": data.get("total_cost_usd"), "turns": data.get("num_turns"),
             "timed_out": rc == -9}
+
+
+_USAGE_KEYS = ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
+
+
+def _agent_args(prompt, model, system, tools, allowed, add_dirs, env_extra, fmt):
+    """claude_agent·claude_agent_capped 공통 인자. (args, prompt, env) 또는 None(claude 없음)."""
+    exe = shutil.which("claude")
+    if not exe:
+        return None
+    model = os.environ.get("VMC_HARNESS_EVAL_MODEL") or model
+    args = [exe, "-p", "--model", model, "--output-format", fmt,
+            "--setting-sources", "", "--strict-mcp-config", "--no-session-persistence",
+            "--permission-mode", "dontAsk", "--tools", ",".join(tools)]
+    if allowed:
+        args += ["--allowedTools"] + list(allowed)
+    args += ["--disallowedTools", "Edit", "Write", "NotebookEdit", "MultiEdit"]
+    for d in add_dirs or []:
+        args += ["--add-dir", str(d)]
+    if system:
+        # Windows: 한글·따옴표·줄바꿈이 든 긴 지시문을 명령줄 인자로 넘기면 claude가 깨진 채 받는 것으로 보인다
+        # (실기 검증 2026-10-30 — 맥에서 4/4 찾는 카드를 Windows에선 못 찾음). 표준 입력 앞에 붙여 보낸다.
+        how = os.environ.get("VMC_HARNESS_LLM_SYSTEM") or ("stdin" if sys.platform == "win32" else "arg")
+        if how == "stdin":
+            prompt = system + "\n\n---\n\n" + (prompt or "")
+        else:
+            args += ["--system-prompt", system]
+    if fmt == "stream-json":
+        args += ["--verbose"]
+    env = dict(os.environ)
+    env["VMC_HARNESS_NESTED"] = "1"
+    env.update(env_extra or {})
+    return args, prompt, env
+
+
+def claude_agent_capped(prompt, model, token_cap, system=None, timeout=900, tools=("Read", "Grep", "Glob", "Bash"),
+                        allowed=None, cwd=None, add_dirs=None, env_extra=None):
+    """claude_agent와 같되 진행 중 토큰(호출마다 usage 합 — claude_agent의 tokens와 같은 정의)이 token_cap을 넘으면
+    그 자리에서 끊는다. 끊으면 {"text": "", "tokens", "sec", "stopped": "token_cap"} — 결과 없음(중단).
+    claude -p는 남은 예산 안에서 정리해 내는 방법이 없어 '넘기 전에 멈추기'만 한다."""
+    import subprocess
+    import threading
+    import time
+    from vmc_harness.core.proc import no_window
+    built = _agent_args(prompt, model, system, tools, allowed, add_dirs, env_extra, "stream-json")
+    if not built:
+        return None
+    args, prompt, env = built
+    t0 = time.time()
+    try:
+        pr = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, cwd=cwd,
+                              env=env, text=True, encoding="utf-8", errors="replace", **no_window())
+    except (OSError, ValueError):
+        return None
+    timer = threading.Timer(timeout, pr.kill)
+    timer.start()
+    seen, tokens, result, stopped = {}, 0, None, None
+    try:
+        try:
+            pr.stdin.write(prompt or "")
+            pr.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
+        for line in pr.stdout:
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            if ev.get("type") == "assistant":
+                msg = ev.get("message") or {}
+                u = msg.get("usage") or {}
+                mid = msg.get("id") or len(seen)
+                seen[mid] = sum(int(u.get(k) or 0) for k in _USAGE_KEYS)
+                tokens = sum(seen.values())
+                if token_cap and tokens > token_cap:
+                    stopped = "token_cap"
+                    pr.kill()
+                    break
+            elif ev.get("type") == "result":
+                result = ev
+    finally:
+        timer.cancel()
+        try:
+            pr.wait(timeout=10)
+        except Exception:
+            pr.kill()
+    sec = time.time() - t0
+    if stopped:
+        return {"text": "", "tokens": tokens, "sec": sec, "cost_usd": None, "turns": len(seen), "stopped": stopped}
+    if not result:
+        return None if not tokens else {"text": "", "tokens": tokens, "sec": sec, "cost_usd": None, "turns": len(seen),
+                                        "timed_out": sec >= timeout}
+    if result.get("is_error") and not result.get("result"):
+        return None
+    usage = result.get("usage") or {}
+    total = sum(int(usage.get(k) or 0) for k in _USAGE_KEYS) or tokens
+    return {"text": (result.get("result") or "").strip(), "tokens": total, "sec": sec,
+            "cost_usd": result.get("total_cost_usd"), "turns": result.get("num_turns"), "timed_out": False}
