@@ -44,10 +44,16 @@ def _state_path(root):
 
 
 def is_registered(root):
+    """등록 기록이 있고 그 mod 폴더가 아직 있을 때만 참. 커널 업데이트로 옛 버전 폴더가 지워지면 패널은 뜨지 않는데
+    기록만 남아 완료 보고 아래 2줄까지 꺼지던 문제(2026-11-18 실측: 지워진 0.1.7 경로)."""
     try:
-        return bool((read_json(_state_path(root), {}) or {}).get("registered"))
+        st = read_json(_state_path(root), {}) or {}
     except RuntimeError:
         return False
+    if not st.get("registered"):
+        return False
+    d = st.get("mod_dir")
+    return not d or (Path(d) / ".claude-plugin" / "plugin.json").is_file()
 
 
 def _claude():
