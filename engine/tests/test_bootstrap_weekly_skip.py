@@ -54,6 +54,7 @@ class WeeklySkipTest(HarnessTestCase):
 
     def test_enough_new_sessions_or_tasks_runs(self):
         new = now().isoformat()
+        events.log(self.root, "gate_block", gate_id="kernel.declare")  # 새 신호(고칠 거리) 1건 — 없으면 skipped_no_signal
         for sessions, tasks in ((5, 0), (0, 5)):
             for i in range(tasks):
                 ledger.append_task(self.root, {"task_id": "T-n%d" % i, "started_at": new})
@@ -68,3 +69,19 @@ class WeeklySkipTest(HarnessTestCase):
 
     def test_unknown_previous_time_runs(self):
         self.assertEqual(weekly.changes_since(self.root, [], None)["sessions"], float("inf"))
+
+    def test_new_input_without_new_signal_skips(self):
+        new = now().isoformat()
+        sess = [_sess("n%d" % i, new) for i in range(6)]
+        st, run, rb = self._job(sess)
+        run.assert_not_called()
+        self.assertEqual(st["status"], "skipped_no_signal")
+        self.assertEqual(events.read(self.root, "diagnose_weekly")[0]["tokens"], 0)
+
+    def test_risk_command_counts_as_signal_but_mention_does_not(self):
+        new = now().isoformat()
+        sess = [_sess("n%d" % i, new) for i in range(6)]
+        sess[0]["tool_calls"] = [{"at": new, "commands": ["grep -n 'git reset --hard' notes.md"]}]
+        self.assertEqual(weekly.new_signals(self.root, sess, self.prev_at.isoformat())["risk_commands"], 0)
+        sess[1]["tool_calls"] = [{"at": new, "commands": ["git reset --hard HEAD~1"]}]
+        self.assertEqual(weekly.new_signals(self.root, sess, self.prev_at.isoformat())["risk_commands"], 1)

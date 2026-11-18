@@ -18,7 +18,7 @@ import time
 from datetime import timedelta
 from pathlib import PurePosixPath
 
-from vmc_harness.bootstrap import util
+from vmc_harness.bootstrap import signals, util
 from vmc_harness.core import config, gitutil
 from vmc_harness.core.clock import parse_iso
 from vmc_harness.core.mask import mask
@@ -169,7 +169,7 @@ def run(root, condition, sessions=None, max_scenes=None):
                         break
             elif t == "command":
                 for cmd in tc.get("commands") or []:
-                    if regex.search(cmd):
+                    if signals.cmd_search(regex, cmd):
                         matched = cmd
                         break
             elif t == "db_direct":

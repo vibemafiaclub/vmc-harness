@@ -44,7 +44,7 @@ class ProposalKindTest(HarnessTestCase):
         fake = {"text": json.dumps(data, ensure_ascii=False), "tokens": 10, "sec": 0.1}
         with mock.patch("vmc_harness.core.llm.available", return_value=True), \
                 mock.patch("vmc_harness.core.llm.nested", return_value=False), \
-                mock.patch("vmc_harness.core.llm.claude_agent", return_value=fake), \
+                mock.patch("vmc_harness.core.llm.claude_agent_capped", return_value=fake), \
                 mock.patch.object(diagnose, "render_proposal", return_value={}):
             return diagnose.run(self.root, sessions=[])
 

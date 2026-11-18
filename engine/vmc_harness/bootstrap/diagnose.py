@@ -458,18 +458,28 @@ def run(root, sessions=None, analysis_dir=None, progress=None, use_llm=True, tri
         p = prompt if attempt == 0 else (
             prompt + "\n\n앞선 출력이 형식 검사를 통과하지 못했다: " + "; ".join(errors[:8]) +
             "\n같은 진단 내용으로 출력 형식만 맞춰 JSON 하나로 다시 낸다.\n앞선 출력:\n" + (raw or "")[:12000])
-        res = llm.claude_agent(p, model=config.get("diagnose.model", root), timeout=budget_sec, allowed=allowed,
-                               cwd=str(root), add_dirs=add_dirs, env_extra=dict(env_extra, VMC_HARNESS_DIAGNOSE="1"))
+        # 토큰 상한을 실제로 건다 — 넘으면 그 자리에서 끊고 이번 진단은 결과 없이 끝(지난 진단 결과는 그대로 둔다)
+        cap = max(1, int(config.get("diagnose.budget_tokens", root) * config.get("diagnose.budget_hard_ratio", root)) - tokens_total)
+        res = llm.claude_agent_capped(p, model=config.get("diagnose.model", root), token_cap=cap, timeout=budget_sec,
+                                      allowed=allowed, cwd=str(root), add_dirs=add_dirs,
+                                      env_extra=dict(env_extra, VMC_HARNESS_DIAGNOSE="1"))
         if not res:
             errors = ["모델 호출 실패(로그인·시간 초과·오류)"]
             break
         tokens_total += int(res.get("tokens") or 0)
         sec_total += float(res.get("sec") or 0)
+        if res.get("stopped"):
+            result.update(status="stopped_budget", tokens=tokens_total, sec=round(sec_total, 1),
+                          reason="토큰 상한 %d 넘어 중단" % (tokens_total))
+            result["checks"]["over_budget"] = True
+            return result  # diagnosis.json을 덮지 않는다 — 지난 진단이 그대로 남아 다음 기간에 다시 돈다
         raw = res.get("text") or ""
         data = extract_json(raw)
         ok, errors = validate(data, root)
         if ok and not errors:
             break
+        if tokens_total > config.get("diagnose.budget_tokens", root):
+            break  # 예산을 이미 넘었으면 형식 재시도(같은 비용 한 번 더)를 하지 않는다 — 형식이 맞는 제안만 쓴다
         if attempt + 1 < tries:
             result["checks"]["retries"] += 1
     after = _tree_state(root)
@@ -483,12 +493,28 @@ def run(root, sessions=None, analysis_dir=None, progress=None, use_llm=True, tri
     result["checks"]["dropped"] = dropped
     shown_keys = {_key(h) for h in hist.get("shown", [])} | {_key({"title": t}) for t in hist.get("excluded", [])}
     ok = [p for p in ok if _key(p) not in shown_keys]  # 다시 묻지 않는다
+    # 이미 풀린 문제(마지막 신호 뒤 고칠 말이 커밋으로 들어갔고 그 뒤 대화 N개 신호 0)는 내지 않는다(signals.resolution)
+    from vmc_harness.bootstrap import signals
+    sess_all = read_sessions_index(root)
+    keep, resolved = [], []
+    for p in ok:
+        try:
+            r = signals.resolution(root, p, sess_all)
+        except Exception:  # 편의 — 못 재면 그대로 낸다
+            r = None
+        if r and r.get("resolved"):
+            resolved.append({"title": p.get("title"), "fix_at": r.get("fix_at"), "sessions_after": r.get("sessions_after")})
+        else:
+            keep.append(p)
+    ok = keep
+    if resolved:
+        result["checks"]["resolved"] = resolved
     top_k = config.get("diagnose.top_k", root)
     if len(ok) > top_k:
         result["checks"]["truncated"] = len(ok) - top_k
         ok = ok[:top_k]
     say("제안 %d개 — 백테스트 다시 실행(결정적)" % len(ok))
-    sess = read_sessions_index(root)
+    sess = sess_all
     for p in ok:
         p["model_backtest"] = p.pop("backtest", None)
         cond = p.get("condition") if p["kind"] == "gate" else None

@@ -54,7 +54,7 @@ class DiagnoseTest(HarnessTestCase):
         fake = {"text": text, "tokens": 100, "sec": 1.0}
         with mock.patch("vmc_harness.core.llm.available", return_value=True), \
                 mock.patch("vmc_harness.core.llm.nested", return_value=False), \
-                mock.patch("vmc_harness.core.llm.claude_agent", return_value=fake) as m, \
+                mock.patch("vmc_harness.core.llm.claude_agent_capped", return_value=fake) as m, \
                 mock.patch.object(diagnose, "render_proposal", return_value={}):
             d = diagnose.run(self.root, sessions=[])
         return d, m

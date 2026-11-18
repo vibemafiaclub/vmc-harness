@@ -25,6 +25,13 @@ user_desc_chars = 120         # unit=chars md=no spec=07 — 리포트·진단 �
 rule_text_max_chars = 300     # unit=chars md=no spec=07 — 진단 제안 rule_text(규칙 문장 하나) 길이 상한. 넘으면 형식 오류로 다시 묻는다
 weekly_min_new_sessions = 5   # unit=sessions md=no spec=07 measured=no — 정기 재진단: 지난 진단 뒤 새 대화가 이보다 적고
 weekly_min_new_tasks = 5      # unit=tasks md=no spec=07 measured=no — 새 장부 작업도 이보다 적으면 다시 만들지 않는다(skipped_no_change)
+resolved_min_sessions = 20    # unit=sessions md=no spec=07 measured=no — 해결 이벤트(고칠 말이 커밋으로 들어감) 뒤 사람 대화가 이만큼 쌓였고 신호 0이면 이미 풀린 문제로 제안에서 뺀다
+resolved_expected_hits = 5    # unit=hits md=no spec=07 measured=no — 해결 이벤트 뒤 대화가 resolved_min_sessions보다 적어도, 해결 전 빈도(대화당 신호)로 기대되는 신호 수가 이 이상인데 0이면 풀린 문제
+resolved_max_tokens = 6       # unit=tokens md=no spec=07 — 해결 이벤트를 찾을 때 git log -S로 찾는 고칠 말 수 상한
+resolved_git_timeout_s = 30   # unit=s md=no spec=07 — 해결 이벤트 git log -S 1회 상한
+weekly_min_new_signals = 1    # unit=signals md=no spec=07 measured=no — 정기 재진단: 지난 진단 뒤 새 신호(사람 정정·게이트 차단·반박·위험 명령)가 이보다 적으면 다시 만들지 않는다(skipped_no_signal)
+risk_commands = ["(?i)\\b(psql|mysql|sqlcmd|mongosh)\\b", "(?i)env\\s+pull", "(?i)git\\s+(push\\s+(-f|--force)|reset\\s+--hard|clean\\s+-[a-z]*f)", "(?i)\\brm\\s+-[a-z]*r[a-z]*f", "(?i)(security\\s+find-generic-password|keychain)", "(?i)\\s--confirm\\b"]  # unit=regex md=no spec=07 measured=no — 새 위험 명령 패턴(정기 재진단 건너뛰기 판단)
+budget_hard_ratio = 6         # unit=ratio md=no spec=07 measured=no — 진단 모델 호출 토큰이 diagnose.budget_tokens × 이 값을 넘으면 그 자리에서 끊는다(결과 없음 = 중단). 실측 회당 158만~206만(2026-11-18)이라 그 위에서만 끊는 폭주 상한
 
 [backtest]
 fix_window_days = 14          # unit=days md=no spec=07 — 같은 파일을 고친·되돌린 커밋을 "문제가 된 변경"으로 보는 기간
@@ -43,6 +50,9 @@ kinds = ["gate", "rule", "protected", "structure"]  # unit=kinds md=no spec=07 �
 gate_min_problem_changes = 1  # unit=changes md=no spec=07 measured=no — gate 제안 자동 반영 조건: 백테스트 "문제가 된 변경"(막았을 변경 중 뒤에 고쳐지거나 되돌려진 것 = 실제 문제를 잡은 증거)이 이 이상. 헛막기는 판정 반박 비율로 원복(2026-11-16)
 same_target_jaccard = 0.6     # unit=ratio md=no spec=07 measured=no — 같은 종류 제안의 대상(파일·경로 glob·백테스트 장면) 겹침이 이 이상이면 같은 대상으로 묶고 새로 내지 않는다
 human_rules_chars = 12000     # unit=chars md=no spec=07 — 진단 참고 자료 human_rules.md(레포 지침 사람 영역·브레인 카드) 길이 상한
+secret_days = 7               # unit=days md=no spec=07 measured=no — 비밀값 반출 명령 차단 제안: 이 기간 안 발생을 센다(문제 커밋이 안 생기는 분야라 백테스트 문제 변경 대신, 2026-11-18)
+secret_min_hits = 3           # unit=count md=no spec=07 measured=no — 비밀값 반출 명령 차단 제안 자동 반영: 기간 안 발생이 이 이상
+secret_min_sessions = 2       # unit=sessions md=no spec=07 measured=no — 그리고 서로 다른 대화가 이 이상
 
 [profile.gxp]
 autoapply.enabled = false     # spec=07 GMP 변경관리 — 루프가 꺼진 것과 같은 이유로 자동 반영도 끈다
