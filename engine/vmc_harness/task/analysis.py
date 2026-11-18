@@ -155,7 +155,7 @@ def run(root):
     if not config.get("predict_loop.enabled", root):
         return {"enabled": False}
     from vmc_harness.task import lifecycle, state as st
-    tasks = [t for t in st.all_tasks(root) if t.get("ended_at") and (t.get("actual") or {}).get("measured")]
+    tasks = [t for t in st.all_tasks(root, archived=True) if t.get("ended_at") and (t.get("actual") or {}).get("measured")]
     n = 0
     for t in tasks:
         if t.get("analysis"):

@@ -91,7 +91,7 @@ def my_areas(root, cur=None):
         days = config.get("render.recent_area_days", root)
         cutoff = now() - _dt.timedelta(days=days)
         try:
-            for t in st.all_tasks(root):
+            for t in st.all_tasks(root, archived=True):
                 d = parse_iso(t.get("started_at"))
                 if d and d >= cutoff:
                     areas.update((t.get("declare") or {}).get("scope") or [])

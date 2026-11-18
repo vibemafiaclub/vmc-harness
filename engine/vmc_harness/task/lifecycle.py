@@ -232,6 +232,10 @@ def sweep(root, exclude_session=None, at=None):
             continue
         if is_idle(root, t, at=at):
             closed.append(close(root, t, "idle", at=last_iso))
+    try:
+        st.archive_old(root)
+    except OSError:
+        pass
     return closed
 
 
