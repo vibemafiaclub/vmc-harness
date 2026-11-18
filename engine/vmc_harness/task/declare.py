@@ -14,7 +14,22 @@ PCT = ("p30", "p50", "p80")
 
 
 class DeclareError(ValueError):
-    """빠진 것·어긋난 것만 담는다(01 P6)."""
+    """빠진 것·어긋난 것만 담는다(01 P6). options = 그걸 채우는 declare 옵션(문구용 — 실측: 실패 뒤 `--help` 왕복)."""
+
+    def __init__(self, msg, options=None):
+        super().__init__(msg)
+        self.options = list(options or [])
+
+
+# 빠진 항목 → 채우는 옵션 견본(값 자리만 비움). 숫자를 싣지 않는다 — 훅 차단 문구에도 쓰인다(01 P5)
+OPTION_HINT = {
+    "intent": '--intent "<하려는 것>"',
+    "scope": '--scope "<경로,경로>"',
+    "tokens": "--tokens <낮게,보통,높게>",
+    "agent": "--agent-min <낮게,보통,높게>",
+    "test_change": '--test-change-files "<파일>" --test-change-reason "<이유>"',
+    "approvals": "--approvals <건수>",
+}
 
 
 def _list(v):
@@ -25,25 +40,31 @@ def _list(v):
     return [str(x).strip() for x in v if str(x).strip()]
 
 
-def _triple(v, name, missing):
+def _miss(missing, opts, opt, text):
+    missing.append(text)
+    if opts is not None and opt and opt not in opts:
+        opts.append(opt)
+
+
+def _triple(v, name, missing, opt=None, opts=None):
     if isinstance(v, (list, tuple)) and len(v) == len(PCT):
         v = dict(zip(PCT, v))
     if isinstance(v, str):
         parts = [x.strip() for x in v.split(",")]
         v = dict(zip(PCT, parts)) if len(parts) == len(PCT) else None
     if not isinstance(v, dict) or any(v.get(k) in (None, "") for k in PCT):
-        missing.append("예측 %s P30/P50/P80" % name)
+        _miss(missing, opts, opt, "예측 %s P30/P50/P80" % name)
         return None
     try:
         out = {k: float(v[k]) for k in PCT}
     except (TypeError, ValueError):
-        missing.append("예측 %s 숫자 아님" % name)
+        _miss(missing, opts, opt, "예측 %s 숫자 아님" % name)
         return None
     if any(out[k] <= 0 for k in PCT):
-        missing.append("예측 %s 0 이하" % name)
+        _miss(missing, opts, opt, "예측 %s 0 이하" % name)
         return None
     if not (out["p30"] <= out["p50"] <= out["p80"]):
-        missing.append("예측 %s 순서(P30≤P50≤P80) 어긋남" % name)
+        _miss(missing, opts, opt, "예측 %s 순서(P30≤P50≤P80) 어긋남" % name)
         return None
     return {k: (int(x) if float(x).is_integer() else x) for k, x in out.items()}
 
@@ -51,13 +72,13 @@ def _triple(v, name, missing):
 def normalize(raw):
     """입력(dict) → 09 스키마 declare. 빠진 게 있으면 DeclareError(빠진 항목만)."""
     raw = dict(raw or {})
-    missing = []
+    missing, opts = [], []
     intent = mask(str(raw.get("intent") or "").strip())
     if not intent:
-        missing.append("하려는 것(intent)")
+        _miss(missing, opts, "intent", "하려는 것(intent)")
     scope_l = [scope.norm(x) for x in _list(raw.get("scope"))]
     if not scope_l:
-        missing.append("건드릴 범위(scope)")
+        _miss(missing, opts, "scope", "건드릴 범위(scope)")
     new_l = [scope.norm(x) for x in _list(raw.get("new"))]
     tc = raw.get("test_change")
     if tc in ("", False, None, {}):
@@ -66,30 +87,32 @@ def normalize(raw):
         files = [scope.norm(x) for x in _list(tc.get("files"))]
         reason = str(tc.get("reason") or "").strip()
         if not files or not reason:
-            missing.append("테스트 수정의 파일·이유")
+            _miss(missing, opts, "test_change", "테스트 수정의 파일·이유")
         tc = {"files": files, "reason": mask(reason)}
     else:
-        missing.append("테스트 수정 형식({files, reason})")
+        _miss(missing, opts, "test_change", "테스트 수정 형식({files, reason})")
         tc = None
     pred = raw.get("predict") or {}
-    tokens = _triple(pred.get("tokens", raw.get("tokens")), "토큰", missing)
+    tokens = _triple(pred.get("tokens", raw.get("tokens")), "토큰", missing, "tokens", opts)
     sec = pred.get("agent_sec", raw.get("agent_sec"))
     if sec is None and (pred.get("agent_min") or raw.get("agent_min")):
-        m = _triple(pred.get("agent_min") or raw.get("agent_min"), "에이전트 작업 시간(분)", missing)
+        m = _triple(pred.get("agent_min") or raw.get("agent_min"), "에이전트 작업 시간(분)", missing, "agent", opts)
         sec = {k: v * 60 for k, v in m.items()} if m else None
-        agent_sec = _triple(sec, "에이전트 작업 시간", missing) if sec else None
+        agent_sec = _triple(sec, "에이전트 작업 시간", missing, "agent", opts) if sec else None
     else:
-        agent_sec = _triple(sec, "에이전트 작업 시간", missing)
+        agent_sec = _triple(sec, "에이전트 작업 시간", missing, "agent", opts)
     appr = raw.get("approvals_expected", 0)
     try:
         appr = int(appr or 0)
         if appr < 0:
             raise ValueError
     except (TypeError, ValueError):
-        missing.append("승인 예상 건수")
+        _miss(missing, opts, "approvals", "승인 예상 건수")
         appr = 0
     if missing:
-        raise DeclareError("착수 선언에 빠진 것: " + ", ".join(missing))
+        hint = " ".join(OPTION_HINT[o] for o in opts if o in OPTION_HINT)
+        raise DeclareError("착수 선언에 빠진 것: " + ", ".join(missing) + (" — 채울 옵션: " + hint if hint else ""),
+                           options=opts)
     out = {"intent": intent, "scope": scope_l, "new": new_l,
            "protected_touch": bool(raw.get("protected_touch")), "test_change": tc,
            "predict": {"tokens": tokens, "agent_sec": agent_sec}, "approvals_expected": appr}
@@ -172,6 +195,7 @@ def declare(root, raw, session_id=None, agent=None, mode=None):
     {"task","size","created","lines":[출력 줄], "pm_mode", "closed"}"""
     t0 = time.time()
     d = normalize(raw)
+    dhash = declare_hash(d)
     session_id = st.resolve_session_id(root, session_id)
     sess = st.session_get(root, session_id) or {}
     agent = agent or sess.get("agent") or "claude"
@@ -186,6 +210,10 @@ def declare(root, raw, session_id=None, agent=None, mode=None):
     closed = None
     task = None
     merged = False
+    if prev is not None and not prev.get("ended_at") and prev.get("declare_hash") == dhash:
+        # 같은 선언이 다시 옴 — 훅이 명령 앞 구간의 declare를 먼저 등록하고, 그 명령이 실행되며 CLI가 같은 인자로 다시 부른다.
+        # --new-task여도 새 작업을 만들지 않는다(멱등)
+        mode = "same"
     if prev is not None and mode != "same" and not same_task(root, prev, d, mode) and same_turn(root, prev, session_id):
         # 같은 사람 지시 안의 다른 선언 — 마감하지 않고 범위에 더한다. 한 에이전트의 --new-task가 다른 에이전트의 진행 중
         # 작업을 마감하고, 그 작업의 편집이 범위 밖으로 표시됐다(현장 결함 C17)
@@ -214,7 +242,8 @@ def declare(root, raw, session_id=None, agent=None, mode=None):
                 "overdesign": {"signals": [], "details": [], "reviewed": False, "lines_before": None,
                                "lines_after": None, "trimmed": None, "why_not_smaller": None,
                                "llm_spawned": False},
-                "out_of_scope_reasons": {}, "overhead": {"sec": 0.0, "tokens": 0}, "actions": []}
+                "out_of_scope_reasons": {}, "overhead": {"sec": 0.0, "tokens": 0}, "actions": [],
+                "declare_hash": dhash}
         changed = True
         lifecycle.start(root, task)
         try:
@@ -226,6 +255,7 @@ def declare(root, raw, session_id=None, agent=None, mode=None):
         sz = sizer.judge(d, root)
         changed = task.get("declare") != d
         task["declare"] = d
+        task["declare_hash"] = dhash
         task["size"] = sz
         task["last_activity_at"] = now_iso()
         if changed:
@@ -286,6 +316,13 @@ def declare(root, raw, session_id=None, agent=None, mode=None):
         lifecycle.spawn_measure(root, closed["task_id"])
     return {"task": task, "size": sz, "created": created, "lines": lines, "pm_mode": pm_mode, "closed": closed,
             "merged": merged}
+
+
+def declare_hash(d):
+    """정규화한 선언의 해시 — 같은 선언의 재실행을 알아본다(멱등)."""
+    import hashlib
+    import json
+    return hashlib.sha256(json.dumps(d, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:16]
 
 
 def why_not_smaller(root, reason, session_id=None):
