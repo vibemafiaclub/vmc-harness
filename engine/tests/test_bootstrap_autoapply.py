@@ -207,7 +207,7 @@ class DedupeTest(AutoApplyCase):
         fake = {"text": json.dumps({"summary": "s", "proposals": props}, ensure_ascii=False), "tokens": 1, "sec": 1.0}
         with mock.patch("vmc_harness.core.llm.available", return_value=True), \
                 mock.patch("vmc_harness.core.llm.nested", return_value=False), \
-                mock.patch("vmc_harness.core.llm.claude_agent", return_value=fake), \
+                mock.patch("vmc_harness.core.llm.claude_agent_capped", return_value=fake), \
                 mock.patch.object(diagnose, "render_proposal", return_value={}), \
                 mock.patch.object(autoapply, "_backtest_of",
                                   return_value=({"would_block": 1, "problem_changes": 1}, "테스트")):

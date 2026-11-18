@@ -46,6 +46,9 @@ DOMAIN = {
     "삭제": re.compile(r"(삭제|지우|지워|\brm\s|\bdelete\b|drop\s+table|truncate|purge)", re.I),
     "커널": re.compile(r"(하네스\s*(엔진|코드|커널|레포)|커널|[/~]\S*vmc-harness)", re.I),
 }
+# 명령 차단 제안의 분류(evaluate) — 비밀값 반출은 사람 눈에 안 보여 정정·문제 커밋이 생기지 않는다(2026-11-18 실측: 정정 연결 0건)
+SECRET_EXFIL = re.compile(r"(env\s+pull|\.env\b|비밀\s*값|시크릿|secret|token|토큰|api[_ -]?key|키체인|keychain|"
+                          r"find-generic-password|credential|자격\s*증명|DATABASE_URL|접속\s*(문자열|정보)|password|비밀번호)", re.I)
 HARNESS_CONFIG = ".harness/config.json"
 HOOK_SETTINGS = (".claude/settings.json", ".claude/settings.local.json", ".codex/hooks.json")
 HOOK_DIRS = (".claude/hooks/", ".codex/hooks/", ".githooks/", ".husky/")
@@ -187,7 +190,7 @@ def _in_window(at, since, until):
 
 def signal_count(sig, sessions, since=None, until=None):
     """신호가 난 횟수 / 사람이 연 대화 수(since < 시작 ≤ until). {"hits", "sessions", "rate"} — rate는 대화가 없으면 None."""
-    from vmc_harness.bootstrap import util
+    from vmc_harness.bootstrap import signals, util
     since = parse_iso(since) if isinstance(since, str) else since
     until = parse_iso(until) if isinstance(until, str) else until
     since = since.astimezone() if since is not None and since.tzinfo is None else since
@@ -206,7 +209,7 @@ def signal_count(sig, sessions, since=None, until=None):
                         and label in ("%s %s" % (h.get("label") or "", h.get("key") or "")).lower())
             continue
         for tc in s.get("tool_calls") or []:
-            if t == "command" and any(rx.search(c or "") for c in tc.get("commands") or []):
+            if t == "command" and any(signals.cmd_search(rx, c) for c in tc.get("commands") or []):
                 hits += 1
             elif t == "path_write" and tc.get("write") and any(util.any_glob(_norm(x), sig["globs"]) for x in tc.get("paths") or []):
                 hits += 1
@@ -240,12 +243,27 @@ def evaluate(root, p, sessions=None):
         else:
             put("tighten", not m, "안전 장치를 푸는 말: '%s'" % (m.group(0)[:40] if m else ""))
     dh = domain_hits(p)
-    put("domain", not dh, "자동 반영 금지 분야: %s" % ", ".join(dh))
+    cls = gate_class(p)
+    # 외부 발송·결제·삭제 분야는 푸는 변경에만 막는다 — 막기만 하는 게이트·보호 영역·조이는 규칙(외부 행동을 더 막는 것)은
+    # 아래 분류 기준으로 본다. structure(그 분야 코드를 바꾸는 것)와 커널(하네스 상태·엔진)은 방향과 무관하게 막는다
+    tightening = checks.get("tighten") and (kind in ("gate", "protected") or
+                                            (kind == "rule" and p.get("direction") == "tighten"))
+    blocked = [h for h in dh if h == "커널" or not tightening]
+    put("domain", not blocked, "자동 반영 금지 분야: %s" % ", ".join(blocked))
     if kind == "gate":
         cond = p.get("condition") or {}
         bt, src = _backtest_of(p)
         if cond.get("type") in diagnose.KERNEL_GATE_TYPES:
             put("backtest", False, "커널 안전 게이트가 이미 막는 조건(%s)" % cond.get("type"))
+        elif cls == "secret_exfil":
+            ok, why, occ = secret_occurrence(root, p, sessions)
+            put("backtest", ok, why)
+            sig_before = occ
+        elif cls == "external_action":
+            # 외부 행동 자체를 막으면 정상 발송·발행이 다 막힌다(실측 send --confirm 20건 거의 전부 정상).
+            # 형태 차단만 — 안전 스크립트가 생긴 뒤 그 우회를 막는 것(requires)
+            put("backtest", bool(p.get("requires")),
+                "외부 행동 자체를 막는 제안 — 형태 차단(requires로 켜는 우회 차단)만 자동 반영")
         elif bt is None:
             put("backtest", False, "백테스트 결과 없음")
         else:
@@ -266,7 +284,41 @@ def evaluate(root, p, sessions=None):
             put("signal", bool(sig_before["rate"]), "신호가 지난 대화 기록에 없음(%d/%d)" % (sig_before["hits"], sig_before["sessions"]))
     else:
         put("signal", True)
-    return {"eligible": all(checks.values()), "checks": checks, "reasons": reasons, "signal_before": sig_before}
+    return {"eligible": all(checks.values()), "checks": checks, "reasons": reasons, "signal_before": sig_before,
+            "class": cls}
+
+
+def gate_class(p):
+    """명령 차단 제안 분류: secret_exfil | external_action | other (제목·막는 것·범위·조건 글자)."""
+    if p.get("kind") != "gate":
+        return "other"
+    cond = p.get("condition") if isinstance(p.get("condition"), dict) else {}
+    text = " ".join([str(p.get(k) or "") for k in ("title", "blocks", "scope")] + [str(cond.get("regex") or "")])
+    if SECRET_EXFIL.search(text):
+        return "secret_exfil"
+    if DOMAIN["외부 발송"].search(text) or DOMAIN["결제"].search(text):
+        return "external_action"
+    return "other"
+
+
+def secret_occurrence(root, p, sessions=None, until=None):
+    """비밀값 반출 게이트 자동 반영 조건: 최근 autoapply.secret_days일 안 autoapply.secret_min_hits회 이상,
+    autoapply.secret_min_sessions개 대화 이상, 이미 풀리지 않음(해결 이벤트). (ok, 이유, {"hits","sessions"})."""
+    from vmc_harness.bootstrap import diagnose, signals
+    rx = signals.regex_of(p)
+    if rx is None:
+        return False, "명령 조건이 아님 — 발생 횟수로 잴 수 없음", None
+    sess = sessions if sessions is not None else diagnose.read_sessions_index(root)
+    hits, nsess = signals.recent_hits(rx, sess, config.get("autoapply.secret_days", root), until)
+    occ = {"hits": hits, "sessions": nsess}
+    need_h, need_s = config.get("autoapply.secret_min_hits", root), config.get("autoapply.secret_min_sessions", root)
+    if hits < need_h or nsess < need_s:
+        return False, "최근 %d일 발생 %d회·%d개 대화 < %d회·%d개" % (
+            config.get("autoapply.secret_days", root), hits, nsess, need_h, need_s), occ
+    res = signals.resolution(root, p, sess)
+    if res and res.get("resolved"):
+        return False, "이미 풀린 문제(%s 커밋 뒤 대화 %d개 0건)" % ((res.get("fix_at") or "")[:16], res["sessions_after"]), occ
+    return True, None, occ
 
 
 # ---------------------------------------------------------------- 같은 대상 묶기
@@ -282,7 +334,11 @@ def signature(p):
     if kind == "rule":
         files |= set(_ticked(_text(p)))
     c = p.get("condition") if kind == "gate" and isinstance(p.get("condition"), dict) else {}
-    cmds = sorted({str(c["regex"])} if c.get("regex") else set())
+    cmds = {str(c["regex"])} if c.get("regex") else set()
+    sg = p.get("signal") if isinstance(p.get("signal"), dict) else {}
+    if sg.get("type") == "command" and sg.get("regex"):
+        cmds.add(str(sg["regex"]))
+    cmds = sorted(cmds)
     gate = json.dumps({k: (sorted(v) if isinstance(v, list) else v) for k, v in sorted(c.items())},
                       ensure_ascii=False, sort_keys=True) if c else None
     bt = p.get("backtest") if isinstance(p.get("backtest"), dict) else {}
@@ -296,14 +352,20 @@ def _jac(a, b):
     return len(a & b) / float(len(a | b)) if a and b else 0.0
 
 
-def same_target(a, b, th):
-    """(같은가, 무엇으로)."""
+def same_target(a, b, th, hits=None):
+    """(같은가, 무엇으로). hits(정규식) → 지난 대화에서 그 정규식이 맞은 명령 집합 — 글자가 다른 정규식도 같은 명령을 잡으면 같은 대상
+    (이름만 바꾼 재제안 — 2026-11-18 실측 43건 중 약 10건)."""
     if not a or not b or a.get("kind") != b.get("kind"):
         return False, None
     if a.get("gate") and a.get("gate") == b.get("gate"):
         return True, "게이트 조건"
     if set(a.get("cmds") or []) & set(b.get("cmds") or []):
         return True, "명령 패턴"
+    if hits is not None and a.get("cmds") and b.get("cmds"):
+        ha = set().union(*[hits(x) for x in a["cmds"]])
+        hb = set().union(*[hits(x) for x in b["cmds"]])
+        if _jac(ha, hb) >= th:
+            return True, "명령 패턴(같은 명령을 잡음)"
     if _jac(a.get("files"), b.get("files")) >= th:
         return True, "대상 파일"
     if _jac(a.get("scenes"), b.get("scenes")) >= th:
@@ -346,12 +408,13 @@ def dedupe(root, proposals, hist, write=True, skip_titles=()):
     """같은 대상으로 이미 있는 것과 같은 제안은 빼고 앞 것에 묶는다(repeats + 1, 티켓은 count + 1). (남은 것, 묶은 것)."""
     th = config.get("autoapply.same_target_jaccard", root)
     known = known_targets(root, hist, skip_titles)
+    hits = command_hits(root)
     keep, merged = [], []
     for p in proposals:
         sig = signature(p)
         hit = None
         for ks, ref in known:
-            same, by = same_target(sig, ks, th)
+            same, by = same_target(sig, ks, th, hits)
             if same:
                 hit = (ref, by)
                 break
@@ -363,11 +426,35 @@ def dedupe(root, proposals, hist, write=True, skip_titles=()):
         merged.append({"title": p.get("title"), "kind": p.get("kind"), "into": ref.get("title"), "from": ref["from"], "by": by})
         if write:
             if ref.get("entry") is not None:
+                # 기존 제안 갱신 — 다시 났다는 사실과 마지막 근거를 앞 것에 싣는다(새 제안으로 다시 묻지 않는다)
                 ref["entry"]["repeats"] = int(ref["entry"].get("repeats") or 0) + 1
+                ref["entry"]["last_seen"] = now_iso()
+                ref["entry"]["last_evidence"] = str(p.get("evidence") or "")[:300]
             if ref.get("candidate_id"):
                 c = ledger.get_candidate(root, ref["candidate_id"]) or {}
                 ledger.update_candidate(root, ref["candidate_id"], count=int(c.get("count") or 1) + 1)
     return keep, merged
+
+
+def command_hits(root, sessions=None):
+    """정규식 → 지난 대화에서 그 정규식이 맞은 명령 id 집합(언급 제외). 같은 정규식은 한 번만 센다."""
+    from vmc_harness.bootstrap import diagnose, signals
+    cache, rows = {}, []
+    for s in (sessions if sessions is not None else diagnose.read_sessions_index(root)):
+        for i, tc in enumerate(s.get("tool_calls") or []):
+            for j, c in enumerate(tc.get("commands") or []):
+                rows.append(("%s#%d.%d" % (s.get("session_id"), i, j), c))
+
+    def hits(src):
+        if src not in cache:
+            try:
+                rx = re.compile(src, re.I | re.M)
+            except re.error:
+                cache[src] = frozenset()
+            else:
+                cache[src] = frozenset(k for k, c in rows if signals.cmd_search(rx, c))
+        return cache[src]
+    return hits
 
 
 # ---------------------------------------------------------------- 반영 전 기준값(판정이 전후를 비교한다)
@@ -607,15 +694,24 @@ def diff_problems(root, wt, base, head, files):
 # ---------------------------------------------------------------- 판정용 지표(ledger.judge가 부른다 — 코드로 센 숫자만)
 
 def signal_after(root, action):
-    """{"before", "after", "sessions"} — 반영 뒤 사람이 연 대화에서 근거 신호의 대화당 횟수. 잴 수 없으면 None."""
-    from vmc_harness.bootstrap import diagnose
+    """{"before", "after", "sessions", "hits"[, "undeterminable"]} — 반영 뒤 사람이 연 대화에서 근거 신호의 대화당 횟수. 잴 수 없으면 None.
+    before는 반영 직전 대화 judge.auto_signal_before_sessions개에서 다시 잰다(진단 때 잰 200세션 창 값이 아니다) — 그 사이 다른 변경으로
+    이미 줄어든 신호를 이 조치 공으로 돌리지 않게. 그 값이 judge.auto_signal_near_zero 이하면 효과를 잴 수 없다(undeterminable)."""
+    from vmc_harness.bootstrap import diagnose, signals
     auto = action.get("auto") or {}
-    sig, before = auto.get("signal"), auto.get("signal_before") or {}
-    if signal_error(sig) or before.get("rate") is None:
+    sig, snap = auto.get("signal"), auto.get("signal_before") or {}
+    if signal_error(sig) or snap.get("rate") is None:
         return None
     start = action.get("merged_at") or (action.get("trial") or {}).get("started_at") or action.get("created_at")
-    after = signal_count(sig, diagnose.read_sessions_index(root), since=start)
-    return {"before": before["rate"], "after": after["rate"], "sessions": after["sessions"], "hits": after["hits"]}
+    sess = diagnose.read_sessions_index(root)
+    w_since, w_until = signals.last_sessions_window(sess, start, config.get("judge.auto_signal_before_sessions", root))
+    recent = signal_count(sig, sess, since=w_since, until=w_until) if w_until is not None else {"rate": None, "sessions": 0}
+    after = signal_count(sig, sess, since=start)
+    out = {"before": recent["rate"], "before_sessions": recent["sessions"], "before_snapshot": snap["rate"],
+           "after": after["rate"], "sessions": after["sessions"], "hits": after["hits"]}
+    if recent["rate"] is None or recent["rate"] <= config.get("judge.auto_signal_near_zero", root):
+        out["undeterminable"] = True
+    return out
 
 
 def new_test_failures(root, action):

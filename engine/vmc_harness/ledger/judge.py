@@ -70,6 +70,60 @@ def negatives(action, findings):
     return hard, false_blocks
 
 
+CONFLICT_KIND = "guide_conflict"
+
+
+def conflict_count(root, action):
+    """사람이 '아님'을 누르지 않은 지침 충돌 감지 수(서로 다른 대화) — 조치 생성 이후, 카드·규칙 대상만.
+    출처: 원복 후보 알림(notices guide_conflict, 지침마다 한 번) + 감지 기록(events guide_conflict_seen, 감지마다).
+    '아님'(events guide_conflict_dismissed)이 있으면 그 전 감지는 세지 않는다."""
+    t = action.get("target") or {}
+    gid = t.get("card") or t.get("rule_id")
+    if not gid:
+        return 0
+    created = parse_iso(action.get("created_at"))
+    seen = []
+    notes, evs = _conflict_rows(root)
+    for n in notes:
+        r = n.get("refs") or {}
+        if r.get("guide_id") == gid:
+            seen.append((parse_iso(n.get("at")), r.get("session_id") or n.get("id")))
+    cut = None
+    for e in evs:
+        k = e.get("kind")
+        if k == "guide_conflict_seen" and e.get("guide_id") == gid:
+            seen.append((parse_iso(e.get("at")), e.get("session_id") or e.get("at")))
+        elif k == "guide_conflict_dismissed" and e.get("guide_id") == gid:
+            at = parse_iso(e.get("at"))
+            cut = at if cut is None or (at and at > cut) else cut
+    sids = {sid for at, sid in seen if at and (not created or at >= created) and (not cut or at > cut)}
+    return len(sids)
+
+
+_CONFLICT_CACHE = {}
+
+
+def _conflict_rows(root):
+    """(충돌 알림, 충돌 관련 이벤트) — 파일 크기·수정 시각이 같으면 다시 읽지 않는다(판정 한 번에 조치 수만큼 부른다)."""
+    from vmc_harness.core.jsonio import read_jsonl
+    d = local_dir(root)
+    key = []
+    for name in ("notices.jsonl", "events.jsonl"):
+        try:
+            st = (d / name).stat()
+            key.append((st.st_size, st.st_mtime))
+        except OSError:
+            key.append(None)
+    hit = _CONFLICT_CACHE.get(str(d))
+    if hit and hit[0] == key:
+        return hit[1]
+    notes = [n for n in read_jsonl(d / "notices.jsonl") if n.get("kind") == CONFLICT_KIND]
+    evs = [e for e in read_jsonl(d / "events.jsonl")
+           if e.get("kind") in ("guide_conflict_seen", "guide_conflict_dismissed")]
+    _CONFLICT_CACHE[str(d)] = (key, (notes, evs))
+    return notes, evs
+
+
 def trial_start(action):
     """시험 시작 시각 — 다시 연 시험(reopened)이면 그 시각."""
     t = action.get("trial") or {}
@@ -148,6 +202,9 @@ def side_effects(root, action, rows, at=None):
     sg = autoapply.signal_after(root, action)
     if sg:
         side["signal"] = sg
+        if sg.get("undeterminable"):
+            # 반영 직전에 이미 신호가 없었다 — 줄었는지·안 줄었는지 이 조치로 잴 수 없다. 존속·원복 근거로 쓰지 않는다(기간 규칙대로)
+            return None, None, side
         if sg["sessions"] >= config.get("judge.auto_signal_min_sessions", root) and sg["after"] is not None:
             target = sg["before"] * (1 - config.get("judge.auto_signal_min_drop", root))
             if sg["after"] > target:
@@ -171,6 +228,11 @@ def evaluate(root, action, findings, rows, at=None):
         return "reverted", "명시적 부정 %d건(revert·원인 지목·거절·삭제)" % hard, nums
     if fb > fb_limit:
         return "reverted", "헛막기 %d회(즉시 원복 기준 초과)" % fb, nums
+    cc = conflict_count(root, action)
+    if cc:
+        nums["conflicts"] = cc
+        if cc >= config.get("judge.conflict_revert", root):
+            return "reverted", "사람 지시와 부딪힌 감지 %d회('아님' 없음)" % cc, nums
     if (action.get("basis") or {}).get("type") == "diagnosis_auto":
         bad, good, side = side_effects(root, action, rows, at)
         nums["side"] = side
@@ -179,7 +241,10 @@ def evaluate(root, action, findings, rows, at=None):
         days = (at - (trial_start(action) or at)).total_seconds() / 86400.0
         if good and not fb and days >= config.get("judge.min_days", root):
             return "kept", good, nums
-    if exp >= need:
+    # 근거 신호를 재는 자동 반영 조치는 효과(신호 감소)로만 존속한다 — 규칙은 대화마다 읽혀 노출이 저절로 차므로
+    # 노출 수는 존속 근거가 아니다. 효과를 잴 수 없으면(반영 직전 이미 신호 없음) 기간이 끝날 때 입증 안 됨으로 원복
+    effect_only = bool((nums.get("side") or {}).get("signal"))
+    if exp >= need and not effect_only:
         if fb:
             return "reverted", "노출 %d회 중 헛막기 %d회" % (exp, fb), nums
         min_hits = config.get("judge.min_hits", root)
@@ -190,6 +255,10 @@ def evaluate(root, action, findings, rows, at=None):
     if at >= deadline_of(action, root):
         if action.get("human_requested"):
             return "extended", "사람 요청 조치 — 노출 부족(%d/%d)으로 원복하지 않음" % (exp, need), nums
+        if effect_only:
+            sg = nums["side"]["signal"]
+            why = "반영 직전 이미 신호 없음 — 효과를 잴 수 없음" if sg.get("undeterminable") else "근거 신호 감소가 확인되지 않음"
+            return "reverted", "기간 종료, %s — 입증되지 않음" % why, nums
         return "reverted", "기간 종료, 노출 부족(%d/%d) — 입증되지 않음" % (exp, need), nums
     return None, "시험 중", nums
 

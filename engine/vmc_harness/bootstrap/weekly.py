@@ -136,6 +136,46 @@ def changes_since(root, sessions, since):
     return {"sessions": n_sess, "tasks": n_tasks}
 
 
+def new_signals(root, sessions, since):
+    """지난 진단 뒤 새 신호 — 사람 정정(자가 점검)·게이트 차단·에이전트 반박 이벤트 + 위험 명령(diagnose.risk_commands).
+    {"corrections","blocks","disputes","risk_commands","total"}. 지난 진단 시각을 모르면 total=inf."""
+    import re
+    from vmc_harness.bootstrap import signals
+    from vmc_harness.core import events
+    t0 = parse_iso(since) if isinstance(since, str) else None
+    if t0 is None:
+        return {"total": float("inf")}
+    t0 = t0 if t0.tzinfo else t0.astimezone()
+
+    def after(v):
+        t = parse_iso(v) if isinstance(v, str) else None
+        return t is not None and (t if t.tzinfo else t.astimezone()) > t0
+    out = {"corrections": 0, "blocks": 0, "disputes": 0, "risk_commands": 0}
+    for e in events.read(root):
+        if not after(e.get("at")):
+            continue
+        k = e.get("kind")
+        if k == "session_selfcheck":
+            out["corrections"] += int(e.get("corrections") or 0)
+        elif k == "gate_block":
+            out["blocks"] += 1
+        elif k == "block_disputed":
+            out["disputes"] += 1
+    rxs = []
+    for x in config.get("diagnose.risk_commands", root) or []:
+        try:
+            rxs.append(re.compile(x))
+        except re.error:
+            continue
+    for s in sessions or []:
+        for tc in s.get("tool_calls") or []:
+            if after(tc.get("at") or s.get("started_at")) and any(
+                    signals.cmd_search(rx, c) for rx in rxs for c in tc.get("commands") or []):
+                out["risk_commands"] += 1
+    out["total"] = sum(out.values())
+    return out
+
+
 def job(root, ref=None, pdf=True):
     """백그라운드 본체: 세션 다시 읽기 → 진단(실측 포함) → 리포트 HTML+PDF → 알림 한 줄."""
     from vmc_harness.bootstrap import diagnose, report, sessions_input
@@ -156,6 +196,14 @@ def job(root, ref=None, pdf=True):
             write_json(state_path(root), st)
             events.log(root, "diagnose_weekly", status="skipped_no_change", new_sessions=chg["sessions"],
                        new_tasks=chg["tasks"], tokens=0)
+            return st
+        sig = new_signals(root, sessions if sessions is not None else diagnose.read_sessions_index(root),
+                          (diagnose.load(root) or {}).get("generated_at"))
+        if sig["total"] < config.get("diagnose.weekly_min_new_signals", root):
+            # 대화는 늘었어도 고칠 거리(정정·차단·반박·위험 명령)가 새로 없으면 같은 진단을 다시 사지 않는다
+            st.update(status="skipped_no_signal", ended_at=now_iso(), new_signals=sig)
+            write_json(state_path(root), st)
+            events.log(root, "diagnose_weekly", status="skipped_no_signal", tokens=0, **{k: v for k, v in sig.items() if k != "total"})
             return st
         st["baselines"] = refresh_baselines(root, sessions, info)
         d = diagnose.run(root, sessions=sessions, trigger="weekly")

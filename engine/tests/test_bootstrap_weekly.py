@@ -167,7 +167,7 @@ class WeeklyTest(HarnessTestCase):
         fake = {"text": json.dumps(payload, ensure_ascii=False), "tokens": 100, "sec": 1.0}
         with mock.patch("vmc_harness.core.llm.available", return_value=True), \
                 mock.patch("vmc_harness.core.llm.nested", return_value=False), \
-                mock.patch("vmc_harness.core.llm.claude_agent", return_value=fake) as m, \
+                mock.patch("vmc_harness.core.llm.claude_agent_capped", return_value=fake) as m, \
                 mock.patch.object(diagnose, "render_proposal", return_value={}):
             d = diagnose.run(self.root, sessions=sessions, trigger=trigger)
         return d, m.call_args[0][0]
@@ -260,11 +260,13 @@ class WeeklyTest(HarnessTestCase):
         fake = {"text": json.dumps(GOOD, ensure_ascii=False), "tokens": 100, "sec": 1.0}
         with mock.patch("vmc_harness.core.llm.available", return_value=True), \
                 mock.patch("vmc_harness.core.llm.nested", return_value=False), \
-                mock.patch("vmc_harness.core.llm.claude_agent", return_value=fake), \
+                mock.patch("vmc_harness.core.llm.claude_agent_capped", return_value=fake), \
                 mock.patch.object(diagnose, "render_proposal", return_value={}), \
                 mock.patch.object(report, "to_pdf", return_value=(None, "x")), \
                 mock.patch.object(sessions_input, "load", return_value=([], {"main": 0})):
             ledger.append_task(self.root, {"task_id": "T-w1", "started_at": now().isoformat()})
+            from vmc_harness.core import events
+            events.log(self.root, "gate_block", gate_id="kernel.declare")  # 새 신호 1건(없으면 skipped_no_signal)
             with mock.patch.object(config, "get", side_effect=lambda k, r=None, profile=None:
                                    1 if k == "diagnose.weekly_min_new_tasks" else config.defaults()[0][k]):
                 st = weekly.job(self.root)  # 지난 진단 뒤 새 작업 1건 ≥ 상한 1 → 다시 만든다
