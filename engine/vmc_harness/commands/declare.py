@@ -34,6 +34,27 @@ def register(sub):
     p.set_defaults(func=_run)
 
 
+class _ArgError(ValueError):
+    pass
+
+
+class _Parser(argparse.ArgumentParser):
+    def error(self, message):
+        raise _ArgError(message)
+
+
+def parse_argv(argv):
+    """`vmc-harness declare` 인자 목록 → (raw dict, mode). 훅이 명령 앞 구간의 declare를 미리 등록할 때 쓴다(task.handlers).
+    인자 오류·JSON·stdin 입력·--why-not-smaller 단독이면 ValueError — 훅은 그 명령을 막고 빠진 것을 알린다."""
+    top = _Parser(prog="vmc-harness", add_help=False)
+    sub = top.add_subparsers(parser_class=_Parser)
+    register(sub)
+    a = top.parse_args(["declare"] + list(argv))
+    if a.json:
+        raise ValueError("--json 입력")
+    return _from_args(a), ("same" if a.same_task else ("new" if a.new_task else None))
+
+
 def _flat(values):
     out = []
     for v in values or []:

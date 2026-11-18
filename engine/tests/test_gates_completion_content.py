@@ -74,6 +74,25 @@ class TestCompletionContent(TaskMixin, GatesCase):
         self._touch_later()
         self.assertEqual(self.stop().get("decision"), "block")
 
+    def test_script_edit_then_rebase_keeps_registration_time_evidence(self):
+        # Bash 스크립트로 고친 파일(도구 쓰기 기록 없음) → 자동·API·테스트처럼 등록 순간에 만든 증거 →
+        # git pull --rebase가 같은 내용으로 시각만 올림. 증거의 내용 해시가 지금과 같으면 인정(2026-11-18 현장)
+        t = self.set_task()
+        self.write("fe/pages/settle.tsx", "export const A = 2\n")
+        time.sleep(0.05)
+        evidence.make(self.root, t["task_id"], "api_call", "GET /settle", data={"status": 200})
+        self._touch_later()
+        self.assertEqual(self.stop(), {})
+
+    def test_script_edit_then_real_change_after_registration_evidence_blocks(self):
+        t = self.set_task()
+        self.write("fe/pages/settle.tsx", "export const A = 2\n")
+        time.sleep(0.05)
+        evidence.make(self.root, t["task_id"], "api_call", "GET /settle", data={"status": 200})
+        self.write("fe/pages/settle.tsx", "export const A = 3\n")
+        self._touch_later()
+        self.assertEqual(self.stop().get("decision"), "block")
+
     def test_old_marker_without_snapshot_uses_time(self):
         from vmc_harness.gates import completion
         self.assertFalse(completion.same_content({}, {"a": "x"}))

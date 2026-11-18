@@ -18,13 +18,19 @@ from vmc_harness.core import config, events, inject
 from vmc_harness.core.clock import now_iso
 from vmc_harness.hooks.contract import HookResult
 from vmc_harness.task import state as st
+from vmc_harness.task.declare import OPTION_HINT
 
 WRITE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch", "str_replace_editor",
                "create_file", "edit_file")
 NO_DECLARE = "착수 선언 없음"
-# 빠진 것과 그걸 채우는 도구·항목(01 P6 — 절차가 아니라 빠진 것과 도구). 실측: 차단 뒤 에이전트가 매번 --help로 한 번 더 왕복(2026-11-11)
-# 예측 항목 이름은 싣지 않는다 — 작업 중 주입에 예측·토큰 낱말 금지(01 P5, 빠지면 declare가 빠진 항목을 알려 준다)
-NO_DECLARE_DETAIL = "%s — 도구 `vmc-harness declare`, 필요한 항목: 하려는 것(--intent)·건드릴 범위(--scope)·예측" % NO_DECLARE
+# 빠진 것과 그걸 채우는 도구·옵션 견본(01 P6 — 절차가 아니라 빠진 것과 도구). 견본은 값 자리만 비운다.
+# 01 P5가 막는 것은 작업 중 예측·예산·실측 "숫자" 주입이다 — 옵션 이름은 착수 시점 정보라 싣는다(inject 필터 통과).
+# 실측: 옵션 이름이 없던 차단 뒤 에이전트가 71%에서 `declare --help`로 한 번 더 왕복했다(2026-11-09~18, 102건)
+_DECLARE_SAMPLE = "vmc-harness declare %s" % " ".join(
+    OPTION_HINT[k] for k in ("intent", "scope", "tokens", "agent"))
+NO_DECLARE_DETAIL = "%s — 도구 `%s`" % (NO_DECLARE, _DECLARE_SAMPLE)
+# 같은 명령에서 착수 선언 앞에 와도 되는 구간(쓰기 없는 위치 이동·조회)
+_INLINE_PREFIX_OK = {"cd", "pushd", "pwd", "ls", "true"}
 OVERDESIGN_GATE = "overdesign"
 
 
@@ -116,6 +122,61 @@ def on_user_prompt(ctx):
     return None
 
 
+def _inline_declare(ctx):
+    """같은 셸 명령의 앞 구간이 `vmc-harness declare …`면 PreToolUse 시점엔 아직 선언 전이라 통째로 막혔다(실측 22건).
+    훅이 그 인자를 직접 검증·등록한다. 종료 코드에 기대지 않는다 — 실측 22건 모두 `| tail`이라 실패가 사라진다.
+    None = 명령에 선언 없음. {"task"} = 등록함(뒤 쓰기 통과). {"reason"} = 막을 이유(빠진 것).
+    명령이 실행되며 CLI가 같은 인자로 다시 부르면 같은 작업을 돌려준다(task.declare 멱등)."""
+    if ctx.tool_name != "Bash" or not ctx.command or not ctx.session_id:
+        return None
+    from vmc_harness.gates import shell
+    try:
+        segs = shell._segments(ctx.command)
+    except Exception:
+        return None
+    idx = None
+    for i, toks in enumerate(segs):
+        words = [t for t in toks if not isinstance(t, shell.Op)]
+        if len(words) >= 2 and shell._base(words[0]) == "vmc-harness" and words[1] == "declare":
+            if any(w in ("--help", "-h") for w in words[2:]):
+                return None   # 사용법 보기 — 선언이 아니다
+            idx = i
+            break
+    if idx is None:
+        return None
+    for toks in segs[:idx]:
+        words = [t for t in toks if not isinstance(t, shell.Op)]
+        if any(isinstance(t, shell.Op) for t in toks) or not words or shell._base(words[0]) not in _INLINE_PREFIX_OK:
+            return {"reason": "%s — 같은 명령에서 착수 선언보다 앞에 다른 명령이 있음" % NO_DECLARE}
+    argv, skip = [], False
+    for t in segs[idx][2:]:
+        if isinstance(t, shell.Op):
+            skip = t.lstrip("0123456789") in shell.REDIRECTS or t.lstrip("0123456789").startswith(("<", ">"))
+            continue
+        if skip:
+            skip = False
+            continue
+        if any(kind != "lit" for kind, _ in (getattr(t, "parts", ()) or ())):
+            return {"reason": "%s — 같은 명령의 착수 선언 인자에 변수·명령 치환이 있어 값을 알 수 없음" % NO_DECLARE}
+        argv.append(str(t))
+    from vmc_harness.commands import declare as cmd
+    from vmc_harness.task import declare as dec
+    try:
+        raw, mode = cmd.parse_argv(argv)
+    except ValueError:
+        return {"reason": "%s — 같은 명령의 착수 선언 인자를 읽을 수 없음, 도구 `%s`" % (NO_DECLARE, _DECLARE_SAMPLE)}
+    try:
+        res = dec.declare(ctx.root, raw, session_id=ctx.session_id, agent=ctx.agent, mode=mode)
+    except dec.DeclareError as e:
+        hint = " ".join(OPTION_HINT[o] for o in e.options if o in OPTION_HINT)
+        return {"reason": "%s — 같은 명령의 착수 선언에 빠진 옵션: %s" % (NO_DECLARE, hint or _DECLARE_SAMPLE)}
+    try:
+        events.log(ctx.root, "declare_inline", task_id=res["task"]["task_id"], session_id=ctx.session_id)
+    except Exception:
+        pass
+    return {"task": res["task"]}
+
+
 def on_pre_tool(ctx):
     if not ctx.root:
         return None
@@ -133,11 +194,17 @@ def on_pre_tool(ctx):
                 return HookResult(inject=[msg])
         return None
     if not task:
-        try:
-            events.log(root, "gate_block", gate_id="kernel.declare", tool=ctx.tool_name)
-        except Exception:
-            pass
-        return HookResult(block=True, reason=inject.message("gate_violation", NO_DECLARE_DETAIL))
+        inline = _inline_declare(ctx)
+        if inline and inline.get("task"):
+            task = _bind(ctx, inline["task"])
+        else:
+            detail = (inline or {}).get("reason") or NO_DECLARE_DETAIL
+            try:
+                events.log(root, "gate_block", gate_id="kernel.declare", tool=ctx.tool_name,
+                           inline=bool(inline))
+            except Exception:
+                pass
+            return HookResult(block=True, reason=inject.message("gate_violation", detail))
     from vmc_harness.task import scope
     injects = []
     stamp = now_iso()

@@ -152,7 +152,10 @@ class TestInjectFilter(GatesCase):
             hso = out.get("hookSpecificOutput") or {}
             texts.extend([hso.get("additionalContext") or "", hso.get("permissionDecisionReason") or "", out.get("reason") or ""])
         injected = "\n".join(t for t in texts if t)
-        self.assertEqual(NUMERIC.findall(injected), [], injected)
+        # 착수 선언 차단은 착수 시점 정보다(01 P5 허용) — 채울 옵션 이름(--tokens)이 실린다. 숫자는 없다
+        during = "\n".join(x for x in injected.splitlines() if "착수 선언 없음" not in x)
+        self.assertEqual(NUMERIC.findall(during), [], during)
+        self.assertEqual(re.findall(r"\d", "\n".join(x for x in injected.splitlines() if "착수 선언 없음" in x)), [])
         self.assertIn("[vmc-harness:pm_opinion]", injected)
         for line in injected.splitlines():
             self.assertRegex(line, r"^\[vmc-harness:(gate_violation|missing_evidence|pm_opinion|declare_context)\] ")
