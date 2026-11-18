@@ -80,7 +80,7 @@ class SelfcheckTest(HarnessTestCase):
             return selfcheck.run_session(self.root, "/x/%s.jsonl" % sid, "claude", sid)
 
     def test_learning_needs_two(self):
-        l = {"same_as": None, "gist": "한 페이지 먼저 확인", "title": "한 페이지 먼저", "situation": "디자인 변경",
+        l = {"label": "correction", "same_as": None, "gist": "한 페이지 먼저 확인", "title": "한 페이지 먼저", "situation": "디자인 변경",
              "judgment": "전체 적용 전에 한 페이지로 확인", "signals": ["페이지 수정"], "not_when": "급할 때",
              "cross_project": True, "why_not_higher": "취향이라 기계 판정 불가", "prompt_index": 0, "quote": "한 페이지만 먼저"}
         r1 = self._run(_session(["아니 한 페이지만 먼저 해줘"]), {"corrections": 1, "learnings": [l], "explicit_requests": []})

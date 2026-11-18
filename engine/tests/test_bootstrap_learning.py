@@ -21,9 +21,9 @@ p = sys.stdin.read()
 res = "{}"
 if p.startswith("사람 발화:"):
     time.sleep(float(os.environ.get("FAKE_CLAUDE_SLEEP", "0")))
-    m = re.search(r"^0\. (.+)$", p, re.M)
+    m = re.search(r"\[사람\] (.+)$", p, re.M)
     c = re.search(r"^(\S+): ", p.split("기존 학습 후보:", 1)[1], re.M)
-    res = json.dumps({"corrections": 1, "learnings": [{
+    res = json.dumps({"corrections": 1, "learnings": [{"label": "correction",
         "same_as": c.group(1) if c else None, "gist": "합성 취지", "title": "합성 카드", "situation": "s", "judgment": "j",
         "signals": ["x"], "not_when": "n", "cross_project": True, "why_not_higher": "상황마다 다르다",
         "prompt_index": 0, "quote": (m.group(1) if m else "x")[:6]}], "explicit_requests": []}, ensure_ascii=False)
