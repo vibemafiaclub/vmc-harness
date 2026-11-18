@@ -459,3 +459,60 @@ def text(b, tab="me", all_items=False):
             out.append("(없음)")
     out += ["", b["status_line"]]
     return "\n".join(out)
+
+
+# ---------------- 하루 1건 바깥 전달(`vmc-harness brief --top`) ----------------
+
+def _reply(kind, item_id, refs):
+    """답장 키워드 → 그대로 실행할 명령. 버튼과 같은 처리(spec 08 — 모든 버튼은 되돌릴 수 있다)."""
+    if kind == "guide_conflict":
+        return {"빼": "vmc-harness notice revert %s" % item_id, "유지": "vmc-harness notice dismiss %s" % item_id}
+    if kind == "proposal_auto":
+        return {"빼": "vmc-harness notice exclude %s" % item_id, "유지": None}
+    if kind == "proposal":
+        return {"넣어": "vmc-harness notice add %s" % item_id, "빼": "vmc-harness notice exclude %s" % item_id}
+    if kind == "gate_disabled":
+        return {"켜": "vmc-harness notice on %s" % item_id, "유지": "vmc-harness notice keep %s" % item_id}
+    return {"그만": "vmc-harness notice mute %s" % item_id}
+
+
+def top_item(root, mark=False):
+    """사람이 답할 만한 가장 중요한 1건 — 매일 바깥 브리핑(디스코드 등)에 붙이는 용도(spec 08 §전달, 2026-11-18).
+    순서: 정정과 부딪힌 지침(원복 후보) → 하네스 조치 원복·게이트 꺼짐·오류 → 자동 반영(시험 중) → 답 안 한 진단 제안 → 소식.
+    mark=True면 고른 알림을 보인 것으로 표시(실제로 보낸 경우만). 진단 제안은 답할 때까지 다시 고른다.
+    → {"kind","id","text","reply":{키워드: 명령|None},"more":남은 개수} | None"""
+    nv, _ = notices_view(root, None, allow_llm=False)
+    order = list(config.get("render.top_kinds", root))
+    unseen = [n for n in nv if not n["seen"] and n.get("kind") in order]
+    props = proposals_view(root)
+    auto = [p for p in props if p["buttons"] == ["제외"] and p["text"].startswith("자동 반영")]
+    open_p = [p for p in props if p["buttons"] == ["추가", "제외"]]
+    cand = []
+    for n in unseen:
+        cand.append((order.index(n["kind"]), n.get("at") or "", {"kind": n["kind"], "id": n["id"], "text": n["text"],
+                                                                 "refs": n.get("refs") or {}, "_notice": True}))
+    rank_auto = order.index("diagnosis_auto_applied") if "diagnosis_auto_applied" in order else len(order)
+    for p in auto:
+        cand.append((rank_auto, "", {"kind": "proposal_auto", "id": p["id"], "text": p["text"], "refs": {}}))
+    rank_prop = order.index("diagnosis_weekly") if "diagnosis_weekly" in order else len(order)
+    for p in open_p:
+        cand.append((rank_prop - 0.5, "", {"kind": "proposal", "id": p["id"], "text": p["text"], "refs": {}}))
+    if not cand:
+        return None
+    cand.sort(key=lambda c: (c[0], c[1]))
+    best = cand[0][2]
+    out = {"kind": best["kind"], "id": best["id"], "text": best["text"],
+           "reply": _reply(best["kind"], best["id"], best["refs"]), "more": len(cand) - 1}
+    if mark and best.get("_notice"):
+        mark_seen(root, [best["id"]])
+    return out
+
+
+def top_text(item):
+    """사람 말 한 문단 + 답장 안내(명령은 받는 쪽 에이전트가 실행)."""
+    if not item:
+        return ""
+    keys = [k for k, v in (item.get("reply") or {}).items() if v]
+    tail = (" — 답장: %s" % " / ".join("'%s'" % k for k in keys)) if keys else ""
+    more = (" (남은 소식 %d건: `vmc-harness brief`)" % item["more"]) if item.get("more") else ""
+    return "하네스: %s%s%s" % (item["text"], tail, more)

@@ -13,6 +13,7 @@ map_model = "haiku"           # unit=name md=yes spec=08
 map_llm_workers = 6           # unit=count md=no spec=08 — 책임 한 줄 묶음을 동시에 묻는 수
 map_budget_s = 300            # unit=s md=no spec=08 measured=no — 책임 한 줄 전체 상한. 넘으면 남은 묶음은 비워 두고 다음 build가 채운다(모듈 4,481개 PC에서 순차 호출로 수 시간 멈춘 것처럼 보임, 2026-10-23)
 max_files = 20000             # unit=files md=no spec=08 — 구조 지도가 훑는 파일 상한(넘으면 잘림 표시)
+ledger_git_local = false      # unit=bool md=no spec=09 — 참이면 팀 장부(.harness/ledger/)·렌더 어휘집(lexicon.json)을 git에서 빼고 이 PC 로컬 원본으로 둔다(.harness/.gitignore). 팀 합산이 없는 solo만 켠다 — 설치 뒤 한 번도 커밋되지 않고 `git add -A` 한 번에 관계없는 커밋에 섞이던 문제(2026-11-18 실측: 353파일 미추적)
 
 [diagnose]
 model = "opus"                # unit=name md=yes spec=07 — 시니어식 진단 모델
@@ -49,3 +50,4 @@ autoapply.enabled = false     # spec=07 GMP 변경관리 — 루프가 꺼진 �
 
 [profile.solo]
 autoapply.enabled = true      # spec=07 혼자 쓰는 레포 — 자동 반영을 여기서 먼저 실측한다(2026-11-16)
+bootstrap.ledger_git_local = true  # spec=09 혼자 쓰는 레포 — 장부를 로컬 원본으로(2026-11-18)

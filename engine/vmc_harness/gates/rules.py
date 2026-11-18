@@ -198,7 +198,78 @@ def render(root):
         log_event(str(root), "rules_rendered", tokens=tokens, block_hash=hashlib.sha256(block.encode("utf-8")).hexdigest()[:16])
     except Exception:
         pass
-    return {"tokens": tokens, "changed": changed, "path": str(agents)}
+    commit = None
+    try:
+        commit = commit_rules(root)
+    except Exception:
+        pass
+    return {"tokens": tokens, "changed": changed, "path": str(agents), "commit": commit}
+
+
+def _changed_action_ids(root):
+    """rules.json에서 HEAD와 달라진 규칙의 action_id — 커밋 trailer(Harness-Action)용."""
+    import json
+    cur = {r.get("id"): r for r in (read_json(rules_path(root), {}) or {}).get("rules") or [] if isinstance(r, dict)}
+    rc, out, _ = run(["git", "show", "HEAD:./.harness/rules.json"], cwd=str(root),
+                     timeout=config.get("gates.selfcommit_git_timeout_s", root))
+    try:
+        old = {r.get("id"): r for r in (json.loads(out) if rc == 0 else {}).get("rules") or [] if isinstance(r, dict)}
+    except ValueError:
+        old = {}
+    ids = []
+    for rid in set(cur) | set(old):
+        a, b = cur.get(rid), old.get(rid)
+        if a != b:
+            aid = (a or b or {}).get("action_id")
+            if aid and aid not in ids:
+                ids.append(aid)
+    return sorted(ids)
+
+
+def _head_text(root, rel):
+    rc, out, _ = run(["git", "show", "HEAD:./" + rel], cwd=str(root),
+                     timeout=config.get("gates.selfcommit_git_timeout_s", root))
+    return out if rc == 0 else None
+
+
+def _only_harness_change(root, rel):
+    """사람이 고친 내용을 하네스 이름으로 커밋하지 않게 — HEAD 대비 차이가 하네스 몫뿐일 때만 참.
+    AGENTS.md: HEAD 내용에 지금 표시 블록을 넣으면 지금 파일과 같다. CLAUDE.md: HEAD에 없던 `@AGENTS.md` 한 줄 파일이거나 그 한 줄만 덧붙임."""
+    cur, _ = textfile.read(Path(root) / rel)
+    if cur is None:
+        return False
+    cur = cur.replace("\r\n", "\n")   # git show(텍스트 모드)와 같은 줄끝으로 비교
+    old = _head_text(root, rel)
+    old = old.replace("\r\n", "\n") if old is not None else None
+    if rel == "AGENTS.md":
+        m = _BLOCK.search(cur)
+        if not m:
+            return old is not None and remove_block(old) == cur
+        return apply_block(old, m.group(0), "\n") == cur if old is not None else cur == m.group(0)
+    if old is None:
+        return cur.strip() == "@AGENTS.md"
+    return cur.rstrip("\n") in (old.rstrip("\n") + "\n@AGENTS.md", old + "@AGENTS.md")
+
+
+def commit_rules(root):
+    """하네스가 바꾼 규칙 블록·rules.json·(새로 만든) CLAUDE.md를 그 경로만 커밋(spec 09). push 없음.
+    → selfcommit 결과 dict. 사람이 그 파일을 staged 해 뒀거나 rebase 중이면 건너뛰고 다음 렌더 때 다시."""
+    from vmc_harness.gates import selfcommit
+    rc, out, _ = run(["git", "status", "--porcelain", "--", "AGENTS.md", "CLAUDE.md", ".harness/rules.json"],
+                     cwd=str(root), timeout=config.get("gates.selfcommit_git_timeout_s", root))
+    if rc != 0 or not out.strip():
+        return None
+    rels = [".harness/rules.json"] + [r for r in ("AGENTS.md", "CLAUDE.md") if _only_harness_change(root, r)]
+    ids = _changed_action_ids(root)
+    trailers = [("Harness-Action", a) for a in ids]
+    subject = "chore(harness): 하네스 규칙 블록을 갱신한다" + (" (%s)" % ", ".join(ids) if ids else "")
+    res = selfcommit.commit_paths(root, rels, subject, trailers)
+    try:
+        log_event(str(root), "rules_committed", ok=res.get("ok"), commit=res.get("commit"),
+                  paths=res.get("paths"), reason=res.get("reason"), actions=ids)
+    except Exception:
+        pass
+    return res
 
 
 def unrender(root):

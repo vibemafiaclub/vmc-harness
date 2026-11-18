@@ -1,7 +1,7 @@
 """`vmc-harness init` (spec 07) — 프로젝트 부모 폴더에서 프로젝트당 1회. 이미 있으면 갱신.
 
 설치 프로그램의 실행 순서(모델에게 주는 절차가 아니다):
- 1 project_id·`.harness/config.json`(profile 기본 standard, source_roots 자동)·`.harness/.gitignore`(cache/)
+ 1 project_id·`.harness/config.json`(profile 기본 standard, source_roots 자동)·`.harness/.gitignore`(cache/, solo는 ledger/·lexicon.json도)
  2 훅·MCP 등록(gates·brain 영역, Codex 훅 신뢰 포함), commit hook(task 영역), QA 서브에이전트(qa 영역), mod 패널(render 영역)
  3 Claude Code cleanupPeriodDays(사용자 `~/.claude/settings.json` — 더 크면 그대로, 바꾸면 한 줄 알림)
  4 OS 스케줄러(loop 영역)
@@ -25,7 +25,6 @@ from vmc_harness.core.clock import now_iso
 from vmc_harness.core.ids import new_uuid
 from vmc_harness.core.jsonio import read_json, write_json
 
-GITIGNORE = "cache/\n"
 CLAUDE_IMPORT_NOTE = "CLAUDE.md가 AGENTS.md를 불러오지 않아 Claude Code가 하네스 규칙을 못 읽는 구조였어요 — CLAUDE.md 끝에 `@AGENTS.md` 한 줄을 덧붙였어요(기존 내용·줄끝은 그대로)"
 
 
@@ -88,10 +87,8 @@ def write_config(root, profile=None, source_roots=None):
     cfg["updated_at"] = now_iso()
     cfg.setdefault("created_files", [])
     write_json(cp, cfg)
-    gi = hd / ".gitignore"
-    if not gi.is_file() or "cache/" not in gi.read_text(encoding="utf-8"):
-        with gi.open("a", encoding="utf-8", newline="\n") as f:
-            f.write(GITIGNORE)
+    from vmc_harness.bootstrap import gitignore
+    gitignore.ensure(root)   # cache/ — solo면 ledger/·lexicon.json도(spec 09)
     return cfg, created
 
 

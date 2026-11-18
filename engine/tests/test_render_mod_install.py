@@ -30,3 +30,8 @@ class ModInstallTest(HarnessTestCase):
     def test_no_claude(self):
         with mock.patch.object(mod_install, "_claude", return_value=None):
             self.assertFalse(mod_install.register(self.root)["ok"])
+
+    def test_registered_record_with_deleted_mod_dir_is_not_registered(self):
+        from vmc_harness.core.jsonio import write_json
+        write_json(mod_install._state_path(self.root), {"registered": True, "mod_dir": str(self.root / "gone" / "mod")})
+        self.assertFalse(mod_install.is_registered(self.root))   # 옛 커널 버전 폴더가 지워진 경우(2026-11-18 실측)
