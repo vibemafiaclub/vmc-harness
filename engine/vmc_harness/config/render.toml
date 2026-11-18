@@ -18,3 +18,4 @@ pdf_timeout_s = 60               # unit=s md=no spec=08
 brief_fresh_s = 20               # unit=s md=no spec=08 measured=no
 trend_weeks = 4                  # unit=weeks md=no spec=08
 daily_lines = 2                  # unit=lines md=no spec=08
+top_kinds = ["guide_conflict", "action_reverted", "gate_disabled", "harness_error", "ledger_tracked", "budget_over", "diagnosis_auto_applied", "learning_done", "diagnosis_weekly"]  # unit=list md=no spec=08 — `brief --top`(하루 1건 바깥 전달)이 고르는 알림 종류 순서. 사람이 답해야 바뀌는 것 → 하네스가 스스로 한 일 → 소식. gate_blocked는 넣지 않는다(이미 대화에 보였다)

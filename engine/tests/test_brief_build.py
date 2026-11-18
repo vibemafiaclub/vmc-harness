@@ -164,3 +164,43 @@ class ProposalTest(HarnessTestCase):
             b = brief.build(self.root)
         self.assertEqual([(p["id"], p["text"]) for p in b["me"]["proposals"]], [("1", "SQL 폴더 밖 sql 쓰기 막기")])
         self.assertEqual(b["me"]["proposals"][0]["buttons"], ["추가", "제외"])
+
+
+class BriefTopTest(HarnessTestCase):
+    def setUp(self):
+        super().setUp()
+        p = mock.patch("vmc_harness.core.llm.claude_p", return_value=None)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_none_when_nothing(self):
+        self.assertIsNone(brief.top_item(self.root))
+
+    def test_guide_conflict_first_with_reply_commands(self):
+        notices.add(self.root, "diagnosis_weekly", "flow", "오늘 진단 리포트")
+        notices.add(self.root, "gate_blocked", "must", "운영 DB 쓰기 차단")
+        nid = notices.add(self.root, "guide_conflict", "flow", "'표시 안 해도 돼' — 이 지침과 부딪힌 것 같음",
+                          refs={"guide_id": "K-1"})["id"]
+        it = brief.top_item(self.root)
+        self.assertEqual(it["kind"], "guide_conflict")
+        self.assertEqual(it["reply"]["빼"], "vmc-harness notice revert %s" % nid)
+        self.assertEqual(it["reply"]["유지"], "vmc-harness notice dismiss %s" % nid)
+        self.assertEqual(it["more"], 1)                       # gate_blocked는 고르지 않는다
+        self.assertIn("답장: '빼' / '유지'", brief.top_text(it))
+        # mark 없이는 다시 고른다, mark면 다음엔 다음 것
+        self.assertEqual(brief.top_item(self.root)["id"], nid)
+        brief.top_item(self.root, mark=True)
+        self.assertEqual(brief.top_item(self.root)["kind"], "diagnosis_weekly")
+
+    def test_cli_json(self):
+        notices.add(self.root, "action_reverted", "must", "규칙 하나를 되돌렸어요")
+        from vmc_harness.commands import brief as cmd
+        import argparse
+        a = argparse.Namespace(json=True, html=False, pdf=False, tab="me", all=False, session=None,
+                               refresh=False, weekly=False, top=True, mark_seen=False)
+        buf = io.StringIO()
+        with mock.patch("vmc_harness.core.paths.find_project_root", return_value=str(self.root)), redirect_stdout(buf):
+            cmd._run(a)
+        out = json.loads(buf.getvalue())
+        self.assertEqual(out["item"]["kind"], "action_reverted")
+        self.assertTrue(out["text"].startswith("하네스: "))

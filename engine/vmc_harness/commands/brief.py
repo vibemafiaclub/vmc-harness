@@ -6,6 +6,7 @@
   brief --html          이번 주 HTML(.harness/cache/reports/) 경로 출력  ·  --pdf  팀 대시보드 PDF
   brief --refresh       캐시 갱신(렌더링 재작성 포함) — 세션 시작 훅이 백그라운드로 부른다
   brief --weekly        지난주 성장 브리핑 HTML + 팀 대시보드 HTML·PDF 생성(월요일 자동)
+  brief --top [--json] [--mark-seen]  사람이 답할 만한 가장 중요한 1건(매일 바깥 브리핑용). --mark-seen은 실제로 보냈을 때만
 """
 
 import json
@@ -22,6 +23,8 @@ def register(sub):
     p.add_argument("--session", help="세션 id(mod가 넘긴다)")
     p.add_argument("--refresh", action="store_true")
     p.add_argument("--weekly", action="store_true")
+    p.add_argument("--top", action="store_true", help="가장 중요한 1건(바깥 브리핑용)")
+    p.add_argument("--mark-seen", action="store_true", help="--top으로 고른 알림을 보인 것으로 표시")
     p.set_defaults(func=_run)
 
 
@@ -39,6 +42,13 @@ def _run(a):
         print("하네스가 설치되지 않은 프로젝트")
         return 2
     from vmc_harness.render import brief, growth
+    if a.top:
+        item = brief.top_item(root, mark=a.mark_seen)
+        if a.json:
+            print(json.dumps({"installed": True, "item": item, "text": brief.top_text(item)}, ensure_ascii=False))
+        elif item:
+            print(brief.top_text(item))
+        return 0
     if a.refresh or a.weekly:
         out = {}
         if a.refresh:
