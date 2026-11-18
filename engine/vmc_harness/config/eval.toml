@@ -5,6 +5,8 @@
 diagnose_runs = 1                # unit=runs md=no spec=11 — ① 진단을 새로 돌리는 횟수(출력이 매번 달라 평균). 1회 3~6분
 classify_sample_prompts = 100    # unit=prompts md=no spec=11 — ② 비용 상한: 표본에 넣는 사람 발화 수
 classify_session_max_prompts = 30  # unit=prompts md=no spec=11 — ② 표본 세션의 발화 상한(긴 세션 하나가 표본을 다 먹지 않게)
+learning_runs = 3                # unit=runs md=no spec=11 — ⑥ 학습 발화 라벨을 돌리는 횟수(LLM 출력이 흔들려 중앙값, 2026-11-18 실측 흔들림 ±4건)
+learning_batch = 15              # unit=prompts md=no spec=11 — ⑥ 한 번에 넘기는 발화 수(한 세션처럼 묶는다)
 classify_workers = 4             # unit=procs md=no spec=11 — ② 동시에 띄우는 LLM 호출 수
 overhead_rounds = 3              # unit=tasks md=no spec=11 — ④ 소·중 작업 각각 실측 건수
 overhead_bg_wait_s = 90          # unit=s md=yes spec=11 — ④ 백그라운드 PM·카드 검색 결과를 기다리는 상한(토큰 집계용)

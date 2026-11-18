@@ -21,6 +21,7 @@ ledger_stall_h = 48          # unit=h md=no spec=04 measured=no 작업 기록은
 bm25_k1 = 1.2                # unit=ratio md=no spec=04 BM25 대체 검색(마피아MCP와 같은 값)
 bm25_b = 0.75                # unit=ratio md=no spec=04
 link_timeout_s = 60          # unit=s md=no spec=04 link-brain 원격 fetch·push 상한
+learning_merge_min_overlap = 0.2  # unit=ratio md=yes spec=04 같은 취지 병합 기계 확인 — 취지 글의 글자 두 개 묶음 겹침(짧은 쪽 기준)이 이 이상일 때만 기존 후보에 더한다. 2026-11-18 실측(묶음 27건): 무관 6건 중 3건 걸러짐, 같은 취지 21건 중 4건은 따로 후보가 됨
 
 [selfcheck]
 timeout_s = 120              # unit=s md=yes spec=04 measured=no 학습 후보 추출 LLM 상한
@@ -29,6 +30,8 @@ prompt_chars = 600           # unit=chars md=no spec=04 발화 하나당 넘기�
 pending_sessions = 5         # unit=sessions md=no spec=04 SessionEnd가 없을 때 세션 시작에서 이어 처리할 수
 idle_min = 30                # unit=min md=no spec=04 measured=no 이만큼 기록이 멈춘 세션만 끝난 것으로 본다
 done_keep = 2000             # unit=sessions md=no spec=04 점검 커서를 남겨 두는 최근 세션 수
+ai_context_chars = 600       # unit=chars md=no spec=04 measured=no 사람 발화 앞에 붙이는 직전 AI 응답 끝 길이 — 답·선택과 정정을 가르는 맥락(2026-11-18 실측: 없으면 답·승인을 정정으로 읽음)
+approval_quote_max_chars = 20  # unit=chars md=no spec=04 이 길이 이하 인용이 승인·선택어("그래 H29가 좋다", "들어가도돼")면 학습하지 않는다
 min_llm_chars = 6            # unit=chars md=no spec=04 measured=no 새 사람 발화 글자 합이 이보다 짧으면('ㄱㄱ' 같은 승인만) 세기만 하고 LLM을 부르지 않는다
 
 [why]
