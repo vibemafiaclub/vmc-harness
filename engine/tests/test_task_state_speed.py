@@ -80,7 +80,8 @@ class StateSpeedTest(HarnessTestCase):
         p = self.root / "src/a.py"
         os.utime(p, ns=(p.stat().st_atime_ns, p.stat().st_mtime_ns + 5_000_000_000))
         self.assertTrue(scope.unchanged_since_base(self.root, "src/a.py", sig))
-        self.write("src/a.py", "a = 3\n")
+        # 크기가 다른 내용으로 — 리눅스 파일 시각 단위가 굵어 같은 크기·같은 시각이 우연히 나올 수 있다(크기·시각이 같으면 그대로로 보는 것은 설계상 한계, spec 09)
+        self.write("src/a.py", "a = 300\n")
         self.assertFalse(scope.unchanged_since_base(self.root, "src/a.py", sig))
         self.assertTrue(scope.unchanged_since_base(self.root, "gone.py", None))
 
