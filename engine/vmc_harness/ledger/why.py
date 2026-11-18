@@ -126,6 +126,47 @@ def _gate_title(root, gid):
     return meta.get("title") or meta.get("name") or gid, meta
 
 
+GATE_KINDS = {"gate_fire": "fired", "gate_block": "blocked", "proceed_anyway": "proceed"}
+
+
+def _gate_event_of_task(e, task_id, sid):
+    """작업 번호가 적힌 게이트 이벤트는 그 번호로, 없으면(선언 전·옛 기록) 세션으로 고른다."""
+    if e.get("kind") not in GATE_KINDS or not e.get("gate_id"):
+        return False
+    if e.get("task_id"):
+        return e["task_id"] == task_id
+    return bool(sid) and e.get("session_id") == sid
+
+
+def gate_candidates(root, gate_events):
+    """게이트마다 막은 횟수와 가장 최근 사유·파일 — 횟수만으로는 무엇을 막았는지 알 수 없었다(현장 결함 C18)."""
+    gates = {}
+    for e in gate_events:
+        g = gates.setdefault(e["gate_id"], {"fired": 0, "blocked": 0, "proceed": 0, "reason": None, "paths": [],
+                                            "task": None})
+        g[GATE_KINDS[e["kind"]]] += 1
+        if e["kind"] == "gate_block":
+            g["reason"] = e.get("reason") or g["reason"]
+            g["task"] = e.get("task_id") or g["task"]
+        for rel in e.get("paths") or []:
+            if isinstance(rel, str) and rel not in g["paths"]:
+                g["paths"].append(rel)
+    cap = int(config.get("gates.reason_max_files", root))
+    out = []
+    for gid, g in gates.items():
+        title, meta = _gate_title(root, gid)
+        counts = (["발동 %d" % g["fired"]] if g["fired"] else []) + ["막음 %d" % g["blocked"], "그냥 진행 %d" % g["proceed"]]
+        detail = " · ".join(counts)
+        if g["reason"]:
+            detail += " — 최근 사유: %s" % g["reason"]
+        if g["paths"] and not all(rel in (g["reason"] or "") for rel in g["paths"][:cap]):
+            more = len(g["paths"]) - cap
+            detail += " (파일: %s%s)" % (", ".join(g["paths"][:cap]), " 외 %d" % more if more > 0 else "")
+        out.append({"id": gid, "kind": "gate", "title": title, "detail": detail, "task_id": g["task"],
+                    "basis": (meta.get("basis") or {}).get("type")})
+    return out
+
+
 def collect_task(root, task_id, evs=None):
     evs = events.read(root) if evs is None else evs
     task = find_task(root, task_id) or {}
@@ -157,16 +198,7 @@ def collect_task(root, task_id, evs=None):
                               "status": c.get("status")})
         except ImportError:
             pass
-    gates = {}
-    for e in mine:
-        if e.get("kind") in ("gate_fire", "gate_block", "proceed_anyway") and e.get("gate_id"):
-            g = gates.setdefault(e["gate_id"], {"fired": 0, "blocked": 0, "proceed": 0})
-            g[{"gate_fire": "fired", "gate_block": "blocked", "proceed_anyway": "proceed"}[e["kind"]]] += 1
-    for gid, g in gates.items():
-        title, meta = _gate_title(root, gid)
-        cands.append({"id": gid, "kind": "gate", "title": title,
-                      "detail": "발동 %d · 막음 %d · 그냥 진행 %d" % (g["fired"], g["blocked"], g["proceed"]),
-                      "basis": (meta.get("basis") or {}).get("type")})
+    cands += gate_candidates(root, [e for e in evs if _gate_event_of_task(e, task_id, sid)])
     pm = task.get("pm") or {}
     if pm.get("called") and (pm.get("opinion") or pm.get("wish")):
         cands.append({"id": "pm:%s" % task_id, "kind": "pm", "title": "PM 의견: %s" % (pm.get("opinion") or ""),
@@ -206,6 +238,12 @@ def collect_file(root, rel):
                 seen.add(key)
                 c = dict(c, via_task=tid)
                 cands.append(c)
+    # 막힌 편집은 커밋으로 남지 않는다 — 그 파일을 막은 게이트 이벤트를 직접 찾는다
+    hits = [e for e in evs if e.get("kind") in GATE_KINDS and e.get("gate_id") and rel in (e.get("paths") or [])]
+    for c in gate_candidates(root, hits):
+        if ("gate", c["id"]) not in seen:
+            seen.add(("gate", c["id"]))
+            cands.append(dict(c, via_task=c.get("task_id")) if c.get("task_id") else c)
     for c in area_changes(root, [rel]):
         if ("commit", c["id"]) not in seen:
             seen.add(("commit", c["id"]))

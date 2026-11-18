@@ -22,6 +22,7 @@ test_output_tail_lines = 200     # unit=lines md=no spec=02
 token_ascii_chars = 4            # unit=chars/token md=no spec=02 — 규칙 블록 토큰 추정: 영문 4자=1토큰, 그 외 1자=1토큰
 codex_trust_timeout_s = 20       # unit=s md=no spec=02 — Codex 훅 신뢰 등록(app-server) 시간 상한
 reason_max_files = 5             # unit=files md=no spec=01 — 차단 사유에 나열하는 파일 수
+event_reason_max = 300          # unit=chars md=no spec=04 — 차단 이벤트(gate_block)에 남기는 사유 한 줄 길이. `why`가 이것으로 무엇을 막았는지 보여준다
 state_keep_blocks = 50           # unit=count md=no spec=02 — 세션 캐시에 남기는 최근 차단 수
 shell_max_nest = 4               # unit=levels md=no spec=02 — 셸 명령 안 셸(bash -c·pwsh -Command) 해석 깊이. 넘으면 판정 불가(opaque)로 본다
 # 해석 못 한 셸 명령(python heredoc·스크립트 등)은 미리 막지 않고 실행 뒤 대상 파일(장부·증거·보호 영역·경로형 생성 게이트) 상태를 대조한다

@@ -200,8 +200,8 @@ def on_pre_tool(ctx):
         else:
             detail = (inline or {}).get("reason") or NO_DECLARE_DETAIL
             try:
-                events.log(root, "gate_block", gate_id="kernel.declare", tool=ctx.tool_name,
-                           inline=bool(inline))
+                events.log(root, "gate_block", gate="declare", gate_id="kernel:declare", tool=ctx.tool_name,
+                           inline=bool(inline), session_id=ctx.session_id, reason=detail)
             except Exception:
                 pass
             return HookResult(block=True, reason=inject.message("gate_violation", detail))
@@ -306,17 +306,12 @@ def on_stop(ctx):
             od["details"] = signals
             od["lines_before"] = scope.added_lines(root, task, files)
             try:
-                events.log(root, "gate_block", gate_id="kernel.overdesign", task_id=task["task_id"],
-                           signals=od["signals"])
-            except Exception:
-                pass
-            try:
                 from vmc_harness.ledger.exposure import record
                 record(root, gate_id="kernel.overdesign")
             except Exception:
                 pass
             result = HookResult(block=True, reason=reason)
-            _record_block(ctx, reason)
+            _record_block(ctx, reason, signals=od["signals"])
     st.save(root, task)
     rep = report.build(root, task)
     task = st.by_id(root, task["task_id"]) or task
@@ -331,11 +326,11 @@ def on_stop(ctx):
     return result
 
 
-def _record_block(ctx, reason):
+def _record_block(ctx, reason, **event_fields):
     """과설계 차단도 게이트 차단 기록에 남긴다 — `proceed`가 가장 최근 차단으로 고를 수 있게(현장 결함 C7)."""
     try:
         from vmc_harness.gates import state as gstate
-        gstate.record_block(ctx.root, ctx, OVERDESIGN_GATE, reason, gate_id="kernel:%s" % OVERDESIGN_GATE)
+        gstate.record_block(ctx.root, ctx, OVERDESIGN_GATE, reason, gate_id="kernel:%s" % OVERDESIGN_GATE, **event_fields)
     except Exception:
         pass
 

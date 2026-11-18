@@ -267,7 +267,6 @@ def evaluate(ctx, task=None, path_only=False):
             ctx.state["blocked_gate_id"] = meta["gate_id"]
             ctx.state["blocked_hit"] = sorted(hit)
             state.record_block(ctx.root, ctx, NAME, r.reason, gate_id=meta["gate_id"])
-            log_event(ctx.root, "gate_block", gate=NAME, gate_id=meta["gate_id"], event=ctx.event, tool=ctx.tool_name)
             return r
     return None
 

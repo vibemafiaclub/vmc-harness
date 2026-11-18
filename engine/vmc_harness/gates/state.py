@@ -33,15 +33,37 @@ def fingerprint(ctx):
     return hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
 
 
-def record_block(root, ctx, gate, reason, gate_id=None):
+def record_block(root, ctx, gate, reason, gate_id=None, **event_fields):
+    """차단 목록(그냥 진행 판정용 캐시)과 gate_block 이벤트(why·지표의 원본)를 함께 남긴다 — 둘을 따로 쓰면 한쪽에
+    세션·작업·사유가 빠져 `why`가 차단을 못 찾았다(현장 결함 C18)."""
     ctx.state["recorded_block_gate"] = gate   # 디스패처가 사람에게 전할 풀기 한 줄을 고른다(gates.proceed.unblock_hint)
+    gate_id = gate_id or ("kernel:%s" % gate)
+    wp = ctx.write_paths if isinstance(ctx.write_paths, (list, tuple)) else []
+    rels = [p for p in (ctx.state.get("block_paths") or wp) if isinstance(p, str)]
+    task = task_key(root, ctx.session_id, ctx.task_id if isinstance(ctx.task_id, str) else None)
     st = load(root, ctx.session_id)
     st["blocks"].append({"gate": gate, "gate_id": gate_id, "at": now_iso(), "fingerprint": fingerprint(ctx),
                          "event": ctx.event, "reason": reason, "proceeded": False,
-                         "paths": [p for p in (ctx.state.get("block_paths") or []) if isinstance(p, str)],
-                         "task": task_key(root, ctx.session_id, ctx.task_id if isinstance(ctx.task_id, str) else None)})
+                         "paths": [p for p in (ctx.state.get("block_paths") or []) if isinstance(p, str)], "task": task})
     st["blocks"] = st["blocks"][-_keep():]
     save(root, ctx.session_id, st)
+    from vmc_harness.core import config
+    from vmc_harness.gates.common import log_event
+    sid = ctx.session_id if isinstance(ctx.session_id, str) else None
+    log_event(root, "gate_block", gate=gate, gate_id=gate_id, event=ctx.event,
+              tool=ctx.tool_name if isinstance(ctx.tool_name, str) else None, session_id=sid, task_id=task,
+              reason=reason_line(reason), paths=rels[:int(config.get("gates.reason_max_files", root))], **event_fields)
+
+
+def reason_line(reason):
+    """주입 꼬리표를 뗀 사유 첫 줄(길이 상한) — 사람에게 전하는 풀기 안내 줄은 빼고 무엇을 어겼는지만."""
+    from vmc_harness.core import config
+    s = reason if isinstance(reason, str) else ""
+    if s.startswith("[vmc-harness:") and "] " in s:
+        s = s.split("] ", 1)[1]
+    s = s.split("\n", 1)[0].strip()
+    cap = int(config.get("gates.event_reason_max"))
+    return s if len(s) <= cap else s[:cap - 1] + "…"
 
 
 def _keep():

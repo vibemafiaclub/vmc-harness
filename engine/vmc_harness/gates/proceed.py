@@ -43,7 +43,8 @@ def grant(root, session_id, block, via):
     f = ledger.create_finding(root, "false_block", target, source_event={"via": via, "blocked_at": block["at"],
                                                                          "gate": block["gate"]})
     state.grant_bypass(root, session_id, block)
-    log_event(root, "proceed_anyway", gate=block["gate"], gate_id=block.get("gate_id"), via=via, finding_id=f["finding_id"])
+    log_event(root, "proceed_anyway", gate=block["gate"], gate_id=block.get("gate_id"), via=via, finding_id=f["finding_id"],
+              session_id=session_id, task_id=block.get("task"), paths=list(block.get("paths") or []))
     return f
 
 

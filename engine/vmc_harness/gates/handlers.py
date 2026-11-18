@@ -31,8 +31,6 @@ def _blocked(ctx, gate, result, gate_id=None):
     state.record_block(ctx.root, ctx, gate, result.reason, gate_id=gate_id)
     ctx.state["blocked_gate"] = gate
     try:
-        log_event(ctx.root, "gate_block", gate=gate, gate_id=gate_id, event=ctx.event, tool=ctx.tool_name,
-                   paths=list(ctx.write_paths or [])[:int(config.get("gates.reason_max_files", ctx.root))])
         key = "block:%s:%s" % (gate, state.fingerprint(ctx))
         if state.noticed_once(ctx.root, ctx.session_id, key):
             text = (result.reason or "").split("] ", 1)[-1]
