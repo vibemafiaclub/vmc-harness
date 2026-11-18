@@ -24,6 +24,9 @@ from vmc_harness.gates.common import behavior_globs, behavior_kind, block, log_e
 
 NAME = "completion"
 LABEL = {"page": "페이지", "api": "API", "db": "DB"}
+# 빠진 것을 채우는 도구(01 P6 — 절차가 아니라 도구). 실측: 차단 뒤 `evidence --help`를 96회 불렀다(2026-11-09~18)
+EVIDENCE_TOOLS = (" — 도구 `vmc-harness evidence screenshot --target \"<페이지>\" <파일>` · "
+                  "`vmc-harness evidence api_call <메서드> <URL>` · `vmc-harness evidence test_run -- <테스트 명령>`")
 
 
 def changed(root, session_id, task):
@@ -133,6 +136,7 @@ def evaluate(root, session_id, task):
     markers = evidence.list_markers(root, tkey)
     current = {f: file_sha(root, f) for f in beh_files}
     own_at = own_write_time(root, session_id, beh_files)
+    from vmc_harness.gates import auto_evidence
 
     def _fresh(m):
         t = evidence.marker_time(m)
@@ -140,9 +144,15 @@ def evaluate(root, session_id, task):
             return True
         # 수정 시각만 늦어진 경우(다른 세션의 git autostash 등): 이 세션의 마지막 쓰기 뒤에 만든 증거이고,
         # 증거를 남긴 순간과 지금 내용이 같으면 인정(2026-11-15 현장). 옛 스크린샷 재사용 방지는 그대로(t ≥ 이 세션의 쓰기).
-        return bool(t and own_at and t >= own_at and same_content(m, current))
+        if not t or not same_content(m, current):
+            return False
+        # 증거가 등록 순간에 만들어진 것(자동 마커·API·테스트·드라이런 — 원본 파일 시각 없음)이면 tree_sha가 증거를 만든
+        # 순간의 내용이다 — 도구 쓰기 기록(own_at) 없이도 인정한다. Bash 스크립트로 고친 파일 뒤 git pull --rebase가
+        # 시각만 올린 경우(2026-11-18 현장). 원본 파일을 복사한 스크린샷은 찍은 시각과 내용 해시 시각이 달라 그대로 own_at을 요구한다
+        if not m.get("src_mtime") or auto_evidence.is_auto_capture(m):
+            return True
+        return bool(own_at and t >= own_at)
     fresh = [m for m in markers if _fresh(m)]
-    from vmc_harness.gates import auto_evidence
     seen_page = bool(set(beh) & {"page", "impact"})
     # 자동 화면 캡처(훅이 본 브라우저 캡처 실행)는 페이지·영향 반경 변경에만 — API·DB만 바뀌었으면 테스트·API·드라이런 증거로
     good = [m for m in fresh if evidence.marker_ok(m) and (seen_page or not auto_evidence.is_auto_capture(m))]
@@ -182,5 +192,5 @@ def check(ctx, task):
         except Exception:
             pass
         return None
-    text = "빠진 증거 — " + " / ".join(res["missing"])
+    text = "빠진 증거 — " + " / ".join(res["missing"]) + EVIDENCE_TOOLS
     return block(text, "빠진 증거 — 바뀐 동작에 대한 마지막 편집 이후 실제 동작 증거 없음", kind="missing_evidence")
