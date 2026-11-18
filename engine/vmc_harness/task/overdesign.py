@@ -485,7 +485,7 @@ def machine_signals(root, task, files=None):
     declared = declared_matcher(root, declare)
     existing = [f for f in files if (Path(root) / f).is_file()]
     # 새 파일 = 착수 스냅샷 때 없던 파일(HEAD에도, 착수 전 미커밋 변경에도 없음 — scope.existed_at_base와 같은 기준)
-    pre = (task.get("base") or {}).get("dirty") or {}
+    pre = scope.base_dirty(root, task.get("base") or {}) or {}
     new_files = [f for f in existing if f not in base_files and pre.get(f) is None] if base else list(existing)
 
     # 새 파일·모듈

@@ -18,13 +18,14 @@ def split_z(out):
     return [x for x in (out or "").split("\0") if x]
 
 
-def changed_files(root, base=None):
-    """작업 트리 변경(추적 + 미추적) 파일 목록. base가 있으면 base..작업트리."""
+def changed_files(root, base=None, paths=None):
+    """작업 트리 변경(추적 + 미추적) 파일 목록. base가 있으면 base..작업트리. paths가 있으면 그 경로만 본다."""
     files = set()
-    rc, out, _ = git(root, "diff", "--name-only", "--no-renames", "-z", base or "HEAD")
+    tail = ["--"] + [str(p) for p in paths] if paths else []
+    rc, out, _ = git(root, "diff", "--name-only", "--no-renames", "-z", base or "HEAD", *tail)
     if rc == 0:
         files.update(split_z(out))
-    rc, out, _ = git(root, "ls-files", "--others", "--exclude-standard", "-z")
+    rc, out, _ = git(root, "ls-files", "--others", "--exclude-standard", "-z", *tail)
     if rc == 0:
         files.update(split_z(out))
     return sorted(files)

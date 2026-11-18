@@ -3,11 +3,14 @@
 - `tasks/<task_id>.json`        작업 상태(착수 선언·편집 경로·PM·과설계 점검 진행)
 - `tasks/<task_id>.bg.json`     PM + 카드 검색 비동기 결과
 - `tasks/<task_id>.od.json`     과설계 LLM 판정 비동기 결과
+- `tasks/<task_id>.base.json`   착수 스냅샷의 "이미 바뀌어 있던 파일" 목록(base.dirty) — 작업 파일과 따로 둔다.
+                                작업 트리 변경이 많으면 수 MB라, 훅마다 모든 작업 파일을 읽는 비용이 작업 수에 비례해 늘었다
 - `sessions/<session_id>.json`  훅이 남긴 세션 상태(에이전트·transcript 경로·마지막 활동)
 
 다른 영역 인터페이스(docs/interfaces.md): current(root, session_id), by_id(root, task_id).
 """
 
+import copy
 import hashlib
 import os
 from pathlib import Path
@@ -120,34 +123,162 @@ def prune_sessions(root, keep_days):
 
 # ---- 작업 ----
 
+_DIRTY_SUFFIX = ".base"
+# 이 프로세스(훅 1회) 안에서 작업 파일을 다시 읽지 않는다. 키는 파일, 값은 (mtime_ns, size, 레코드).
+# 다른 프로세스가 고친 파일은 수정 시각·크기가 바뀌어 다시 읽힌다. 돌려줄 때는 사본(호출자가 고쳐도 캐시가 안 바뀜).
+_CACHE = {}
+
+
+def _strip_dirty(root, task):
+    """저장할 사본과 새로 쓸 사이드 파일 내용(쓸 필요 없으면 None).
+    base.dirty는 사이드 파일로 빼고 작업 파일에는 표시(sidecar)만 남긴다. 내용이 바뀐 경우(_dirty_changed — take_base·
+    absorb_outside_changes가 붙인다)나 사이드 파일이 아직 없을 때만 다시 쓴다(훅마다 수 MB를 쓰지 않게)."""
+    base = task.get("base")
+    if not isinstance(base, dict) or "dirty" not in base:
+        if isinstance(base, dict):
+            base.pop("_dirty_changed", None)
+        return task, None
+    changed = base.pop("_dirty_changed", False)
+    rec = dict(task)
+    b = dict(base)
+    dirty = b.pop("dirty")
+    b["sidecar"] = task["task_id"]
+    rec["base"] = b
+    if changed or not task_path(root, task["task_id"], _DIRTY_SUFFIX).is_file():
+        return rec, dirty
+    return rec, None
+
+
 def save(root, task):
     task["updated_at"] = now_iso()
-    write_json(task_path(root, task["task_id"]), task)
+    rec, dirty = _strip_dirty(root, task)
+    if dirty is not None:
+        write_json(task_path(root, task["task_id"], _DIRTY_SUFFIX), dirty)
+    p = write_json(task_path(root, task["task_id"]), rec)
+    _remember(p, rec)
     return task
 
 
+def _remember(p, rec):
+    try:
+        stt = Path(p).stat()
+        _CACHE[str(p)] = (stt.st_mtime_ns, stt.st_size, copy.deepcopy(rec))
+    except OSError:
+        _CACHE.pop(str(p), None)
+
+
+def _load(p, stt=None):
+    """작업 파일 하나(캐시). 옛 형식(base.dirty가 안에 있음)은 읽을 때 사이드 파일로 옮긴다(1회)."""
+    try:
+        stt = stt or p.stat()
+    except OSError:
+        return None
+    hit = _CACHE.get(str(p))
+    if hit and hit[0] == stt.st_mtime_ns and hit[1] == stt.st_size:
+        return hit[2]
+    try:
+        rec = read_json(p)
+    except (ValueError, OSError):
+        return None
+    if not rec or not rec.get("task_id"):
+        return None
+    base = rec.get("base")
+    if isinstance(base, dict) and isinstance(base.get("dirty"), dict):
+        try:
+            write_json(p.parent / ("%s%s.json" % (p.stem, _DIRTY_SUFFIX)), base["dirty"])
+            slim = dict(rec)
+            b = dict(base)
+            b.pop("dirty")
+            b["sidecar"] = rec["task_id"]
+            slim["base"] = b
+            p = write_json(p, slim)
+            rec = slim
+            stt = Path(p).stat()
+        except OSError:
+            pass
+    _CACHE[str(p)] = (stt.st_mtime_ns, stt.st_size, rec)
+    return rec
+
+
+def _copy(rec):
+    return copy.deepcopy(rec) if rec is not None else None
+
+
+def _archive_dir(root):
+    return _tasks_dir(root) / "archive"
+
+
 def by_id(root, task_id):
+    """작업 하나 — 보관(archive)으로 옮긴 옛 작업도 찾는다."""
     if not task_id:
         return None
-    return read_json(task_path(root, task_id))
+    p = task_path(root, task_id)
+    if not p.is_file():
+        p = _archive_dir(root) / p.name
+    return _copy(_load(p))
 
 
-def all_tasks(root):
-    out = []
-    for f in _tasks_dir(root).glob("*.json"):
-        if "." in f.stem:  # <id>.bg / .od / .report 부속 파일
+def base_dirty(root, task_id):
+    """착수 스냅샷의 base.dirty(사이드 파일). 없으면 None."""
+    if not task_id:
+        return None
+    p = task_path(root, task_id, _DIRTY_SUFFIX)
+    if not p.is_file():
+        p = _archive_dir(root) / p.name
+    return read_json(p)
+
+
+def archive_old(root, days=None):
+    """끝난 지 task.archive_after_days가 지난 작업(측정까지 끝난 것)을 tasks/archive/로 옮긴다 — 훅마다 읽는 작업 파일 수를
+    최근 것으로 묶는다(작업이 쌓일수록 모든 훅이 느려졌다). 실측 이력은 장부(ledger.read_tasks)가 원본이라 잃는 것이 없다.
+    by_id·base_dirty·all_tasks(archived=True)는 보관 작업도 본다. 옮긴 작업 id 목록."""
+    from vmc_harness.core import config
+    days = config.get("task.archive_after_days", root) if days is None else days
+    cutoff = now().timestamp() - float(days) * 86400
+    moved = []
+    for t in _all(root):
+        end = parse_iso(t.get("ended_at")) if t.get("ended_at") else None
+        if not end or t.get("measure_pending") or end.timestamp() >= cutoff:
             continue
-        r = read_json(f)
-        if r and r.get("task_id"):
+        dest = _archive_dir(root)
+        dest.mkdir(parents=True, exist_ok=True)
+        for suffix in ("", _DIRTY_SUFFIX):
+            src = task_path(root, t["task_id"], suffix)
+            if src.is_file():
+                try:
+                    os.replace(str(src), str(dest / src.name))
+                except OSError:
+                    pass
+        _CACHE.pop(str(task_path(root, t["task_id"])), None)
+        moved.append(t["task_id"])
+    return moved
+
+
+def _all(root, archived=False):
+    """캐시된 레코드 그대로(고치지 말 것) — 거른 뒤 필요한 것만 사본으로 돌려준다."""
+    out = []
+    files = list(_tasks_dir(root).glob("*.json"))
+    if archived and _archive_dir(root).is_dir():
+        files += list(_archive_dir(root).glob("*.json"))
+    for f in files:
+        if "." in f.stem:  # <id>.bg / .od / .report / .base 부속 파일
+            continue
+        r = _load(f)
+        if r:
             out.append(r)
     out.sort(key=lambda r: r.get("started_at") or "")
     return out
 
 
+def all_tasks(root, archived=False):
+    """작업 전부(착수 순). archived=True면 보관으로 옮긴 옛 작업까지."""
+    return [_copy(r) for r in _all(root, archived)]
+
+
 def open_tasks(root, include_idle=False):
     """끝나지 않은 작업. 마지막 활동 뒤 task.finalize_idle_min이 지난 것은 끝난 것으로 본다(include_idle면 포함)."""
     from vmc_harness.task import lifecycle
-    out = [t for t in all_tasks(root) if not t.get("ended_at")]
+    out = [_copy(t) for t in _all(root) if not t.get("ended_at")]
     if include_idle:
         return out
     return [t for t in out if not lifecycle.is_idle(root, t)]
@@ -155,7 +286,7 @@ def open_tasks(root, include_idle=False):
 
 def session_tasks(root, session_id):
     """이 세션의 작업(끝난 것 포함) — 착수 순."""
-    return [t for t in all_tasks(root) if session_id and t.get("session_id") == session_id]
+    return [_copy(t) for t in _all(root) if session_id and t.get("session_id") == session_id]
 
 
 def current(root, session_id, reopen=False):

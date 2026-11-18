@@ -12,6 +12,8 @@ calib_min_n = 20                 # unit=tasks md=no spec=13 measured=no — 보�
 similar_top_k = 3                # unit=tasks md=no spec=03 — 착수 시점 "비슷한 과거 작업 실측" 개수
 similar_min_score = 0.2          # unit=ratio md=no spec=03 measured=no — 범위·의도 겹침 하한
 finalize_idle_min = 120          # unit=min md=no spec=03 measured=no — 마지막 활동 뒤 이 시간이 지나면 작업을 끝난 것으로 본다(task/lifecycle.py 공용 판정 — 세션 시작·밤 루프·brief 모두 같은 기준)
+base_hash_max_bytes = 1048576    # unit=bytes md=no spec=09 measured=yes — 착수 스냅샷에서 이 크기 이하 파일만 내용 해시를 남긴다(큰 파일은 크기·수정 시각만 — 변경 파일 1,269개·1.2GB 해싱이 566ms였다)
+archive_after_days = 7           # unit=days md=no spec=09 measured=no — 끝난 지 이만큼 지난 작업 파일은 tasks/archive/로(훅은 최근 작업만 읽는다 — 실측 이력 원본은 장부)
 session_keep_days = 90           # unit=days md=no spec=09 — 로컬 세션 상태 파일 보관
 pm_sync_agents = []              # unit=agents md=no spec=03 — PM·카드 검색을 동기로 돌릴 에이전트(Codex 훅 비동기 불가가 확인되면 "codex", 12 #3)
 overdesign_llm_timeout_s = 60    # unit=s md=yes spec=03 measured=no

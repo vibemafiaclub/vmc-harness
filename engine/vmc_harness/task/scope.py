@@ -93,15 +93,66 @@ def _doc_hash(root, rel):
     return hashlib.sha1(text.strip().encode("utf-8")).hexdigest()
 
 
+def _sig(root, rel):
+    """착수 때 파일 서명: 없으면 None, 있으면 {"size","mtime_ns"} + 작은 파일은 "sha1"(내용이 같은데 시각만 바뀐 경우 —
+    --autostash 등 — 를 가리려고). 큰 파일까지 해싱하면 변경 파일이 많은 작업 트리에서 착수·대조가 수 초 걸렸다."""
+    p = Path(root) / rel
+    try:
+        stt = p.stat()
+    except OSError:
+        return None
+    if not p.is_file():
+        return None
+    sig = {"size": stt.st_size, "mtime_ns": stt.st_mtime_ns}
+    from vmc_harness.core import config
+    if stt.st_size <= config.get("task.base_hash_max_bytes", root):
+        sig["sha1"] = st.file_hash(p)
+    return sig
+
+
+def unchanged_since_base(root, rel, sig):
+    """rel이 착수 서명 그대로인가. sig: None(그때 없었음)·문자열(옛 형식 sha1)·_sig 결과."""
+    p = Path(root) / rel
+    if sig is None:
+        return not p.exists()
+    if isinstance(sig, str):
+        return st.file_hash(p) == sig
+    try:
+        stt = p.stat()
+    except OSError:
+        return False
+    if stt.st_size != sig.get("size"):
+        return False
+    if stt.st_mtime_ns == sig.get("mtime_ns"):
+        return True
+    return bool(sig.get("sha1")) and st.file_hash(p) == sig["sha1"]
+
+
+def base_dirty(root, snap):
+    """착수 스냅샷의 dirty({rel: 서명}). 작업 파일에서는 사이드 파일로 빠져 있다(state.save) — 처음 부를 때 읽어 붙인다.
+    dirty가 없는 옛·세션 스냅샷이면 None."""
+    if not isinstance(snap, dict):
+        return None
+    if "dirty" in snap:
+        return snap["dirty"]
+    sc = snap.get("sidecar")
+    if not sc:
+        return None
+    d = st.base_dirty(root, sc)
+    snap["dirty"] = d if isinstance(d, dict) else {}
+    return snap["dirty"]
+
+
 def take_base(root, created=None):
-    """착수 스냅샷: HEAD · 이미 바뀌어 있던 파일 해시 · 하네스 문서의 하네스 부분 뺀 해시 · 앞 작업이 만든 파일."""
+    """착수 스냅샷: HEAD · 이미 바뀌어 있던 파일 서명 · 하네스 문서의 하네스 부분 뺀 해시 · 앞 작업이 만든 파일."""
     from vmc_harness.core.clock import now_iso
     head = gitutil.head(root)
     dirty = {}
     for f in gitutil.changed_files(root, head) if head else gitutil.changed_files(root):
-        dirty[f] = st.file_hash(Path(root) / f)
+        dirty[f] = _sig(root, f)
     docs = {d: _doc_hash(root, d) for d in HARNESS_DOCS}
-    return {"head": head, "dirty": dirty, "docs": docs, "created": sorted(set(created or [])), "taken_at": now_iso()}
+    return {"head": head, "dirty": dirty, "docs": docs, "created": sorted(set(created or [])), "taken_at": now_iso(),
+            "_dirty_changed": True}
 
 
 def _mtime_after(root, rel, since):
@@ -113,6 +164,14 @@ def _mtime_after(root, rel, since):
     return m >= since
 
 
+def _keep(root, x, docs):
+    if not x or harness_owned(x) or is_artifact(x):
+        return False
+    if x in HARNESS_DOCS and x in docs and docs[x] == _doc_hash(root, x):
+        return False  # 하네스 블록·import 줄만 바뀜
+    return True
+
+
 def changes(root, snap, edits=(), exclude=()):
     """스냅샷 이후 바뀐 파일(루트 상대, 정렬). 이 함수 하나가 "이번 작업이 바꾼 것"의 원본이다.
     snap: take_base 결과. dirty가 없는 옛·세션 스냅샷({"head", "since"})은 since 이후 수정 시각으로 거른다.
@@ -120,7 +179,7 @@ def changes(root, snap, edits=(), exclude=()):
     exclude: 다른 진행 중 작업의 편집(그 작업 것)."""
     snap = snap or {}
     head = snap.get("head")
-    dirty = snap.get("dirty")
+    dirty = base_dirty(root, snap)
     docs = snap.get("docs") or {}
     since = None
     if dirty is None and snap.get("since"):
@@ -132,30 +191,42 @@ def changes(root, snap, edits=(), exclude=()):
     out = {e for e in edits if e and (Path(root) / e).is_file()}
     for f in gitutil.changed_files(root, head) if head else gitutil.changed_files(root):
         f = norm(f)
+        if f in out:
+            continue
         if f in exclude and f not in edits:
             continue
-        if f in dirty and dirty[f] == st.file_hash(Path(root) / f):
+        if f in dirty and unchanged_since_base(root, f, dirty[f]):
             continue  # 착수 전부터 바뀌어 있었고 그 뒤로 그대로
         if since is not None and f not in edits and not _mtime_after(root, f, since):
             continue
         out.add(f)
-    res = []
-    for x in sorted(out):
-        if not x or harness_owned(x) or is_artifact(x):
-            continue
-        if x in HARNESS_DOCS and x in docs and docs[x] == _doc_hash(root, x):
-            continue  # 하네스 블록·import 줄만 바뀜
-        res.append(x)
-    return res
+    return [x for x in sorted(out) if _keep(root, x, docs)]
 
 
 def touched(root, task):
     """이번 작업이 건드린 파일(루트 상대) — 착수 이후 바뀐 파일 중 이 작업이 쓴 것(훅이 기록한 편집)만.
     같은 작업 트리를 여러 세션이 함께 쓰면 git 변경에는 다른 세션·끝난 작업·사람이 쓴 파일과 그들의 커밋이 섞인다.
-    그래서 git 변경만으로는 이 작업 것으로 세지 않는다. 해석 못 한 셸 명령의 쓰기는 실행 뒤 대조가 편집으로 넣는다(record_writes)."""
-    edits = task.get("edits") or []
-    mine = {norm(x) for x in edits}
-    return [f for f in changes(root, task.get("base") or {}, edits=edits) if f in mine]
+    그래서 git 변경만으로는 이 작업 것으로 세지 않는다. 해석 못 한 셸 명령의 쓰기는 실행 뒤 대조가 편집으로 넣는다(record_writes).
+
+    changes(snap, edits)를 편집 경로로 거른 것과 같은 결과를, 작업 트리 전체가 아니라 편집 경로만 보고 낸다:
+    지금 있는 편집 파일은 그대로 들어가고, 없어진 편집 파일만 git으로 착수 기준 변경(삭제)인지 확인한다."""
+    snap = task.get("base") or {}
+    docs = snap.get("docs") or {}
+    edits = []
+    for x in task.get("edits") or []:
+        x = norm(x)
+        if x and x not in edits:
+            edits.append(x)
+    out = [e for e in edits if (Path(root) / e).is_file()]
+    gone = [e for e in edits if e not in out]
+    if gone:
+        head = snap.get("head")
+        dirty = base_dirty(root, snap) or {}
+        changed = set(gitutil.changed_files(root, head, paths=gone) if head else gitutil.changed_files(root, paths=gone))
+        for e in gone:
+            if e in changed and not (e in dirty and unchanged_since_base(root, e, dirty[e])):
+                out.append(e)
+    return [x for x in sorted(out) if _keep(root, x, docs)]
 
 
 def written_since(root, since_ns, head=None):
@@ -195,7 +266,7 @@ def existed_at_base(root, snap, rel, created=()):
     snap = snap or {}
     if rel in set(snap.get("created") or []) or rel in set(created or []):
         return False
-    dirty = snap.get("dirty") or {}
+    dirty = base_dirty(root, snap) or {}
     if rel in dirty:
         return dirty[rel] is not None
     head = snap.get("head")
@@ -208,16 +279,17 @@ def existed_at_base(root, snap, rel, created=()):
 def absorb_outside_changes(root, task):
     """세션을 다시 열 때(resume·재개): 그 사이 이 작업 밖에서 생긴 미커밋 변경을 스냅샷에 넣는다(해시가 그대로면 제외)."""
     base = task.get("base")
-    if not isinstance(base, dict) or "dirty" not in base:
+    dirty = base_dirty(root, base)
+    if dirty is None:
         return task
     mine = {norm(x) for x in task.get("edits") or []} | set(task.get("created") or [])
     cache = set((task.get("scope_cache") or {}).get("files") or [])
-    dirty = base.setdefault("dirty", {})
     for f in gitutil.changed_files(root, base.get("head")) if base.get("head") else gitutil.changed_files(root):
         f = norm(f)
         if f in dirty or f in mine or f in cache:
             continue
-        dirty[f] = st.file_hash(Path(root) / f)
+        dirty[f] = _sig(root, f)
+        base["_dirty_changed"] = True
     return task
 
 
