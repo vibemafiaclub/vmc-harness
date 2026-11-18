@@ -64,3 +64,8 @@ verify_pending_max_s = 7200      # unit=s md=no spec=02 — PreToolUse에 적어
 
 # 운영 접속 설정 파일 보호(읽기·그 설정으로 앱 실행) — 이름 패턴은 db.prod_name_patterns 재사용
 prod_config_scan_bytes = 200000  # unit=bytes md=no spec=02 — 접속 정보 형태를 찾을 때 파일 앞에서 읽는 상한
+# 하네스가 바꾼 규칙 블록(AGENTS.md)·rules.json을 그 경로만 커밋한다(spec 09 §저장 위치 — 설치 뒤 한 번도 커밋되지 않던 문제, 2026-11-18)
+selfcommit_enabled = true          # unit=bool md=no spec=09 — 끄면 하네스가 커밋하지 않는다(사람 커밋에 맡김)
+selfcommit_lock_retries = 5        # unit=count md=no spec=09 measured=no — index.lock이 있을 때 다시 해 보는 횟수. 다 실패하면 다음 렌더 때 다시
+selfcommit_retry_ms = 200          # unit=ms md=no spec=09 measured=no — 다시 해 보기 사이 간격
+selfcommit_git_timeout_s = 20      # unit=s md=no spec=09 — 커밋용 git 명령 하나의 상한
