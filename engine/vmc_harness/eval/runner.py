@@ -28,9 +28,13 @@ METRICS = [
     ("overhead", "small_tokens", "lower", True),
     ("overhead", "mid_tokens", "lower", True),
     ("acceptance", "rate", "higher", False),
+    ("learning", "wrong_removed", "higher", False),
+    ("learning", "ok_lost", "lower", False),
+    ("learning", "ask_user_ratio", "lower", False),
 ]
 LABELS = {"diagnosis": "① 진단 정답지", "classify": "② 학습 후보 분류", "render": "③ 렌더링 대조",
-          "overhead": "④ 오버헤드", "acceptance": "⑤ 제안 수용률"}
+          "overhead": "④ 오버헤드", "acceptance": "⑤ 제안 수용률",
+          "learning": "⑥ 학습 발화 라벨"}
 
 
 def _git_commit():
@@ -62,6 +66,9 @@ def run_sets(dataset, sets=None, opts=None, progress=None):
             elif name == "acceptance":
                 from vmc_harness.eval import acceptance
                 r = acceptance.run(dataset, progress=say)
+            elif name == "learning":
+                from vmc_harness.eval import learning_set
+                r = learning_set.run(dataset, runs=opts.get("runs"), progress=say)
             else:
                 r = {"status": "error", "reason": "없는 세트: %s" % name}
         except Exception as e:  # 한 세트 실패가 나머지를 막지 않는다
@@ -162,6 +169,10 @@ def summary_md(result):
             L.append("- %s: 세션 %d · 발화 %d · 예측 %d · 정답 %d · TP %d · D 없는 세션 중 잘못 짚은 세션 %d/%d" % (
                 s.get("method"), m["sessions"], m["prompts"], m["pred"], m["gold"], m["tp"],
                 m["neg_sessions_flagged"], m["neg_sessions"]))
+        if name == "learning" and s.get("runs"):
+            for i, m in enumerate(s["runs"], 1):
+                L.append("- 회차 %d: 오학습 제거 %s · 정상 손실 %s · 과일반화 제거 %s · 확인 처방 %s · 나온 학습 %s" % (
+                    i, m["wrong_removed_n"], m["ok_lost_n"], m["overgen_removed_n"], m["ask_user_ratio"], m["learned"]))
         if name == "render" and s.get("rows"):
             for r in s["rows"]:
                 L.append("- [%s] %s" % (r["id"], r.get("situation") or ""))

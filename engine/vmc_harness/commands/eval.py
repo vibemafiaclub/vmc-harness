@@ -13,8 +13,8 @@ import sys
 def register(sub):
     p = sub.add_parser("eval", help="회귀 세트(진단 정답지·학습 후보 분류·렌더링·오버헤드·수용률) — 릴리스 전 기준선 비교")
     p.add_argument("--dataset", required=True, help="데이터셋 폴더(레포 밖, 예 ~/vmc-client-data/<고객>/eval/)")
-    p.add_argument("--sets", help="쉼표 목록: diagnosis,classify,render,overhead,acceptance (기본 전부)")
-    p.add_argument("--runs", type=int, help="① 진단을 새로 돌리는 횟수(기본 eval.diagnose_runs)")
+    p.add_argument("--sets", help="쉼표 목록: diagnosis,classify,render,overhead,acceptance,learning (기본 전부)")
+    p.add_argument("--runs", type=int, help="① 진단·⑥ 학습 라벨을 돌리는 횟수(기본 eval.diagnose_runs · eval.learning_runs)")
     p.add_argument("--no-existing", action="store_true", help="① 프로젝트에 남은 마지막 진단 결과를 점수에 넣지 않는다")
     p.add_argument("--sample", type=int, help="② 표본 발화 수 상한(기본 eval.classify_sample_prompts)")
     p.add_argument("--rounds", type=int, help="④ 소·중 작업 각각 실측 건수(기본 eval.overhead_rounds)")

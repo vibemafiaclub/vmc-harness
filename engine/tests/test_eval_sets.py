@@ -105,8 +105,9 @@ class ClassifyTest(unittest.TestCase):
 
     def test_classify_session_uses_selfcheck(self):
         out = {"corrections": 1, "learnings": [
-            {"gist": "g", "judgment": "j", "title": "t", "prompt_index": 1, "quote": "안되는데"},
-            {"gist": "g", "judgment": "j", "title": "t", "prompt_index": 0, "quote": "지어낸 인용"}]}  # 기계 검사로 빠짐
+            {"label": "correction", "gist": "g", "judgment": "j", "title": "t", "prompt_index": 1, "quote": "안되는데"},
+            {"label": "correction", "gist": "g", "judgment": "j", "title": "t", "prompt_index": 0, "quote": "지어낸 인용"},  # 기계 검사로 빠짐
+            {"label": "answer", "gist": "g", "judgment": "j", "title": "t", "prompt_index": 0, "quote": "기능 만들어줘"}]}  # 정정 아님
         with mock.patch("vmc_harness.ledger.selfcheck.extract", return_value=(out, {"tokens": 50})):
             r = classify.classify_session(str(self.d), ["기능 만들어줘", "안되는데?"])
         self.assertEqual((r["pred"], r["indices"], r["tokens"]), (1, [1], 50))
@@ -156,3 +157,24 @@ class AcceptanceTest(HarnessTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LearningSetTest(unittest.TestCase):
+    def test_metrics_and_batch_uses_context(self):
+        from vmc_harness.eval import learning_set
+        rows = [{"id": "a", "quote": "그래 B로 가자", "human": "그래 B로 가자", "prevA": "A·B 중 고를까요?", "verdict": "wrong"},
+                {"id": "b", "quote": "운영 화면은 안 봤잖아", "human": "운영 화면은 안 봤잖아", "prevA": None, "verdict": "ok"}]
+        seen = {}
+        out = {"corrections": 1, "learnings": [
+            {"label": "correction", "gist": "g", "title": "t", "judgment": "배포 뒤 화면을 연다", "prompt_index": 1,
+             "quote": "운영 화면은 안 봤잖아"}]}
+
+        def fake(root, prompts, contexts=None, **kw):
+            seen["contexts"] = contexts
+            return out, {"tokens": 7}
+        with mock.patch("vmc_harness.ledger.selfcheck.extract", side_effect=fake):
+            got, tokens = learning_set.run_batch(None, rows)
+        self.assertEqual(seen["contexts"], ["A·B 중 고를까요?", ""])
+        self.assertEqual((got["a"]["learned"], got["b"]["learned"], tokens), (False, True, 7))
+        m = learning_set.metrics(rows, got)
+        self.assertEqual((m["wrong_removed"], m["ok_lost"], m["ask_user_ratio"]), (1.0, 0.0, 0.0))
