@@ -204,6 +204,8 @@ class GuideConflictTest(HarnessTestCase):
         n = [x for x in notices.pending(self.root) if x["kind"] == "guide_conflict"]
         self.assertEqual(len(n), 1)
         self.assertEqual(n[0]["buttons"], ["원복", "아님"])
+        # 감지는 알림과 별개로 매번 남는다(판정이 대화별 횟수로 원복)
+        self.assertEqual([e["guide_id"] for e in events.read(self.root, "guide_conflict_seen")], ["R-1"])
         self.assertEqual(n[0]["refs"]["guide_id"], "R-1")
         self.assertEqual(n[0]["text"], "'전체 말고 이 페이지만' — 이 지침과 부딪힌 것 같음: 앞으로 전체 페이지에 한 번에 적용")
         self.assertEqual(ledger.list_findings(self.root), [])

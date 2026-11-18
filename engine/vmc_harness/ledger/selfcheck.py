@@ -465,11 +465,16 @@ def _short(s, n):
 
 def apply_conflicts(root, conflicts, guides, session_id):
     """원복 후보 알림(흐름) — 같은 지침은 한 번만. 알림만 만든다(finding·장부·판정 없음)."""
-    from vmc_harness.core import notices
+    from vmc_harness.core import events, notices
     done = _proposed_guides(root)
     out = []
     for c in conflicts:
         gid = c["guide_id"]
+        # 감지마다 남긴다(알림은 지침마다 한 번) — 판정이 서로 다른 대화의 충돌 횟수로 원복한다(judge.conflict_revert)
+        try:
+            events.log(root, "guide_conflict_seen", guide_id=gid, session_id=session_id)
+        except Exception:
+            pass
         if gid in done:
             continue
         g = guides[gid]
