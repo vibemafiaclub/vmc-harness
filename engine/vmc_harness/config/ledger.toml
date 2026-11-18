@@ -11,6 +11,9 @@ auto_side_bad_ratio = 0.3    # unit=ratio md=no spec=04 measured=no 자동 반�
 auto_signal_min_sessions = 10  # unit=sessions md=no spec=04 measured=no 자동 반영 조치: 반영 뒤 사람이 연 대화가 이만큼 쌓여야 근거 신호 증감을 판정한다
 auto_signal_min_drop = 0.3   # unit=ratio md=no spec=04 measured=no 자동 반영 조치: 근거 신호(대화당 횟수)가 반영 전보다 이 비율 이상 줄지 않으면 원복, 줄었으면 존속 근거
 auto_new_failures_max = 0    # unit=tests md=no spec=04 자동 반영 조치: 반영 뒤 다시 잰 테스트 기준선에 그 조치가 바꾼 모듈의 새 실패가 이보다 많으면 원복
+auto_signal_before_sessions = 20  # unit=sessions md=no spec=04 measured=no 자동 반영 조치의 반영 전 근거 신호를 반영 직전 사람 대화 이만큼에서 다시 잰다(진단 창 전체가 아니라 — 그 사이 다른 변경으로 이미 준 신호를 이 조치 공으로 돌리지 않게, 2026-11-18)
+auto_signal_near_zero = 0.02  # unit=ratio md=no spec=04 measured=no 반영 직전 근거 신호(대화당 횟수)가 이 이하면 효과를 잴 수 없음 — 신호로 존속·원복하지 않는다
+conflict_revert = 2          # unit=count md=no spec=04 measured=no 사람이 '아님'을 누르지 않은 지침 충돌 감지(서로 다른 대화)가 같은 카드·규칙에 이만큼 쌓이면 원복(약한 부정)
 spawn_grace_min = 30         # unit=min md=no spec=04 measured=no 세션 시작 분리 실행이 이 시간 안에 안 끝나면 실패로 기록하고 다시 돌린다
 
 [health]
