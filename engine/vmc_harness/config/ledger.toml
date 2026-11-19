@@ -30,6 +30,7 @@ learning_merge_min_overlap = 0.2  # unit=ratio md=yes spec=04 같은 취지 병�
 timeout_s = 120              # unit=s md=yes spec=04 measured=no 학습 후보 추출 LLM 상한
 max_prompts = 120            # unit=prompts md=no spec=04 measured=no 한 세션에서 LLM에 넘기는 사람 발화 수 상한
 prompt_chars = 600           # unit=chars md=no spec=04 발화 하나당 넘기는 길이 상한
+existing_cards_max = 80       # unit=cards md=no spec=04 measured=no 학습 추출에 같이 보이는 기존 카드 수 상한(최근 것부터) — 카드가 된 취지를 또 카드로 만들지 않게
 pending_sessions = 5         # unit=sessions md=no spec=04 SessionEnd가 없을 때 세션 시작에서 이어 처리할 수
 idle_min = 30                # unit=min md=no spec=04 measured=no 이만큼 기록이 멈춘 세션만 끝난 것으로 본다
 done_keep = 2000             # unit=sessions md=no spec=04 점검 커서를 남겨 두는 최근 세션 수

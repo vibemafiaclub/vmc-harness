@@ -116,6 +116,45 @@ class ApplyTest(HarnessTestCase):
         d = read_json(local_dir(self.root) / "quotes" / ("%s.draft.json" % cid))
         self.assertEqual(d["title"], "배포 뒤 운영 화면 확인")
 
+    def _make_card(self):
+        r1 = self._run(_session("S1", [("2026-11-18T10:00:00+09:00", "운영 화면은 안 봤잖아")]),
+                       {"corrections": 1, "learnings": [_l()]})
+        cid = r1["learnings"][0]["candidate_id"]
+        r2 = self._run(_session("S2", [("2026-11-18T12:00:00+09:00", "운영 화면은 안 봤잖아")]),
+                       {"corrections": 1, "learnings": [_l(same_as=cid)]})
+        return r2["learnings"][0]["card"]
+
+    def test_same_gist_as_existing_card_records_repeat_not_new_card(self):
+        card = self._make_card()
+        n_actions = len(ledger.list_actions(self.root))
+        n_cands = len(ledger.list_candidates(self.root))
+        for sid, at in (("S3", "2026-11-19T10:00:00+09:00"), ("S4", "2026-11-19T11:00:00+09:00")):
+            r = self._run(_session(sid, [(at, "운영 화면 또 안 봤네")]),
+                          {"corrections": 1, "learnings": [_l(same_as=card, quote="운영 화면 또 안 봤네")]})
+            self.assertEqual(r["learnings"][0], {"card_repeat": card})
+        self.assertEqual(len(ledger.list_actions(self.root)), n_actions)
+        self.assertEqual(len(ledger.list_candidates(self.root)), n_cands)
+
+    def test_unrelated_card_same_as_starts_new_candidate(self):
+        card = self._make_card()
+        other = _l(same_as=card, gist="회의 일정은 캘린더에서 찾는다", title="일정 출처",
+                   judgment="회의 날짜는 캘린더 원본에서 읽는다", quote="11/8 미팅은 안했음")
+        r = self._run(_session("S3", [("2026-11-19T10:00:00+09:00", "11/8 미팅은 안했음")]),
+                      {"corrections": 1, "learnings": [other]})
+        self.assertIn("candidate_id", r["learnings"][0])
+
+    def test_extract_body_lists_existing_cards(self):
+        card = self._make_card()
+        seen = {}
+
+        def fake(body, **kw):
+            seen["body"] = body
+            return {"text": "{}", "tokens": 1}
+        with mock.patch("vmc_harness.core.llm.available", return_value=True), \
+                mock.patch("vmc_harness.core.llm.claude_p", side_effect=fake):
+            selfcheck.extract(self.root, ["안 됐네"])
+        self.assertIn("이미 만든 판단 카드:\n%s: 배포 뒤 운영 화면 확인" % card, seen["body"])
+
     def test_answer_label_is_not_learned(self):
         r = self._run(_session("S1", [("2026-11-18T10:00:00+09:00", "커뮤니티 일화는 들어가도 됩니다")],
                                [("2026-11-18T09:59:00+09:00", "일화를 넣을까요? 기본값은 넣음입니다.")]),
