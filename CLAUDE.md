@@ -1,6 +1,6 @@
 # vmc-harness
 
-VMC 하네스 소스(비공개). **설계 원본은 context-hub `projects/vmc-harness/`** — 이 레포는 그 구현이다.
+VMC 하네스 소스(공개). **설계 원본은 context-hub `projects/vmc-harness/`** — 이 레포는 그 구현이다.
 - 설계: `/Users/sumin/repos/vibemafiaclub/context-hub/projects/vmc-harness/spec/` (00·01을 먼저, 그다음 맡은 문서)
 - 의도 원문: 같은 폴더 `intent/` — 명세가 애매하면 원문이 우선
 - spec과 구현이 달라지면(스키마 필드 등) spec 문서도 함께 고친다
@@ -12,7 +12,7 @@ VMC 하네스 소스(비공개). **설계 원본은 context-hub `projects/vmc-ha
 - 장부 기록은 `core/ledger.py` 함수로만(메타 게이트 강제가 거기 있다). 로컬 원본 이벤트는 `core/events.py`
 - 에이전트에게 주입하는 문구는 `core/inject.message()`로만(01 P5). 게이트 메시지는 무엇이 빠졌는지·무엇을 어겼는지만(01 P6)
 - 고객 데이터(세션 원본·코드·DB 정보·인용)를 이 레포에 넣지 않는다. 테스트 픽스처는 합성 데이터만
-- **공개 레포다(2026-10-30).** 고객사·고객 담당자 이름, 고객 레포의 실제 파일·DB 이름, 계정·리소스 식별자(Cloudflare 계정, 라이선스 id 등)를 코드·주석·커밋 메시지에 쓰지 않는다. 결함 출처는 "현장 결함 C1"처럼 번호만. 운영 문서는 context-hub `projects/vmc-harness/`
+- **공개 레포다(2026-11-26 다시 공개).** 고객사·고객 담당자 이름, 고객 레포의 실제 파일·DB 이름, 계정·리소스 식별자(Cloudflare 계정, 라이선스 id 등)를 코드·주석·커밋 메시지에 쓰지 않는다. 결함 출처는 "현장 결함 C1"처럼 번호만. 운영 문서는 context-hub `projects/vmc-harness/`
 - 테스트: `cd engine && python3 -m unittest discover -s tests -t .` — 영역마다 `tests/test_<영역>_*.py`
 - 하위 명령은 `engine/vmc_harness/commands/<이름>.py`에 `register(subparsers)` — cli.py가 자동 등록
 
