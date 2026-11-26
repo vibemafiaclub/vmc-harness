@@ -1,6 +1,6 @@
 """`vmc-harness eval` — 회귀 세트 실행기(spec 11). 릴리스 전 VMC PC에서 돈다(고객 PC 명령 아님).
 
-    eval --dataset ~/vmc-client-data/bell-ins/eval/                 다섯 세트 전부 → results/<시각>.json·.md, 기준선 비교
+    eval --dataset ~/vmc-client-data/<고객>/eval/                 다섯 세트 전부 → results/<시각>.json·.md, 기준선 비교
     eval --dataset … --sets diagnosis,classify --runs 2 --sample 100
     eval --dataset … --set-baseline                                 이번 결과를 기준선으로
 평가 때만 모델 교체: 환경변수 VMC_HARNESS_EVAL_MODEL=<모델>. 종료 코드: 0 통과(또는 기준선 없음) · 1 기준선보다 나빠짐 · 2 입력 오류
