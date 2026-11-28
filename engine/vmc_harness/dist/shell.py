@@ -5,8 +5,9 @@
 - 설치 스크립트 `install/install.py` (release.py가 이 소스를 base64로 넣어 렌더 — 서버가 서빙)
 - 엔진 `vmc_harness.dist.*` (kernel·server·updater·uninstall이 여기 함수를 부른다)
 
-껍데기가 하는 일: `activate`(키 확인 → 커널 받기·검증·설치)만 직접 하고, 나머지 명령은
-`~/.vmc-harness/kernel/<current>/engine`의 엔진(`python -m vmc_harness`와 같은 진입점)에 넘긴다. 커널이 없으면 activate를 먼저 하라고만 말한다.
+껍데기가 하는 일: 커널 받기·검증·설치(키 없이 — 2026-11-28부터 릴리스는 공개)와 `activate`(라이선스 키, 선택)만 직접 하고,
+나머지 명령은 `~/.vmc-harness/kernel/<current>/engine`의 엔진(`python -m vmc_harness`와 같은 진입점)에 넘긴다.
+커널이 없으면 설치할 때·처음 실행할 때 서버에서 바로 받는다.
 
 설치 배치 (`~/.vmc-harness/`, VMC_HARNESS_HOME으로 바꿀 수 있다)
   bin/vmc_harness_shell.py, bin/vmc-harness(맥·리눅스) | bin/vmc-harness.cmd(윈도우)
@@ -546,11 +547,9 @@ def _write_license(info, mode, store):
 
 
 def update_now(key=None, base=None, check_timeout=CALL_TIMEOUT_S, download_timeout=DOWNLOAD_TIMEOUT_S, keep=KEEP_VERSIONS):
-    """서버 최신 버전을 확인해 다르면 받아 설치한다. 서버에 못 닿거나 키가 거부되면 지금 버전 그대로.
-    결과 {"status": updated|current|unreachable|unauthorized|no_license|no_release|error, ...}"""
+    """서버 최신 버전을 확인해 다르면 받아 설치한다. 키는 선택(있으면 보내 다운로드 기록에 남긴다). 서버에 못 닿으면 지금 버전 그대로.
+    결과 {"status": updated|current|unreachable|unauthorized|no_release|error, ...}"""
     key = key or load_key()
-    if not key:
-        return {"status": "no_license"}
     try:
         st, info = api("GET", "/harness/releases/latest", key=key, timeout=check_timeout, base=base)
     except Unreachable as e:
@@ -863,7 +862,12 @@ def install_self(source, argv=None, out=print):
     out("VMC 하네스 CLI 설치: %s" % lp)
     if changed:
         out("PATH 등록: %s — 새 터미널을 열면 적용된다" % ", ".join(changed))
-    out("다음: vmc-harness activate <라이선스 키>")
+    r = update_now()
+    if r["status"] in ("updated", "current"):
+        out("하네스 커널 %s 설치" % current_version())
+        out("다음: 프로젝트 폴더에서 vmc-harness init")
+    else:
+        out("커널을 아직 받지 못함(%s %s) — 처음 실행할 때 다시 받는다" % (r["status"], r.get("detail") or ""))
     return 0
 
 
@@ -888,8 +892,12 @@ def main(argv=None):
     ensure_sh_launcher()   # 옛 윈도우 설치에 Git Bash 실행기를 채운다(PowerShell·cmd·Codex 경로로 한 번만 불려도 된다)
     eng = engine_dir()
     if not eng or not eng.is_dir():
-        print("하네스 커널이 아직 없음 — 먼저: vmc-harness activate <라이선스 키>", file=sys.stderr)
-        return 2
+        r = update_now()   # 설치 때 못 받았으면 지금 받는다(키 없이)
+        eng = engine_dir()
+        if not eng or not eng.is_dir():
+            print("하네스 커널을 받지 못함(%s %s) — 서버에 닿는지 확인 후 다시 실행. 사내망에서 막혔으면 오프라인 번들: "
+                  "vmc-harness activate --offline <키> --bundle <zip>" % (r["status"], r.get("detail") or ""), file=sys.stderr)
+            return 2
     # 엔진이 띄우는 자식 프로세스(python -m vmc_harness …)도 같은 커널을 보게 한다
     os.environ["PYTHONPATH"] = str(eng) + (os.pathsep + os.environ["PYTHONPATH"] if os.environ.get("PYTHONPATH") else "")
     sys.path.insert(0, str(eng))

@@ -26,7 +26,6 @@ def _run(args):
                "current": "최신 버전 사용 중: %s" % r.get("version"),
                "unreachable": "서버에 닿지 않아 지금 버전으로 진행",
                "unauthorized": "라이선스가 업데이트를 받을 수 없는 상태(%s) — 지금 버전은 계속 동작" % r.get("reason"),
-               "no_license": "활성화 전 — vmc-harness activate <키>",
                "no_release": "서버에 릴리스 없음"}.get(r["status"], "업데이트 실패: %s" % r.get("detail"))
         print(msg)
         if r["status"] == "updated":  # 지금 도는 건 옛 버전 코드라 새 버전 폴더의 출고 정보를 읽는다

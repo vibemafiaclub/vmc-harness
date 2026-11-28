@@ -2,7 +2,7 @@
 #   macOS:   curl -fsSL https://api.vibemafiaclub.com/harness/install.py | python3 -
 #   Windows: irm https://api.vibemafiaclub.com/harness/install.py | python -
 #   offline: python install.py            (from the offline bundle)
-# Installs only the CLI shell (no core logic): ~/.vmc-harness/bin/ + PATH. The kernel comes with `vmc-harness activate <key>`.
+# Installs only the CLI shell (no core logic): ~/.vmc-harness/bin/ + PATH. Then downloads the kernel (no license key needed).
 #
 # The shell source lives in engine/vmc_harness/dist/shell.py (single source). scripts/release.py renders this file with
 # SHELL_B64 filled in and every non-ASCII character escaped, so piping through Windows PowerShell 5.1 (ASCII) is safe.

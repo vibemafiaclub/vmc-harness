@@ -1,6 +1,6 @@
 """자동 업데이트(spec 10). 세션 시작 때 하루 1회 정도 서버 latest를 보고 새 버전이면 받는다.
 
-- 실행 때마다 키를 검사하지 않는다. 서버에 못 닿거나 키가 거부되면(계약 종료) 지금 버전 그대로 조용히 진행
+- 키 없이 받는다(2026-11-28부터 릴리스 공개). 서버에 못 닿으면 지금 버전 그대로 조용히 진행
 - `update.auto`가 꺼져 있으면(PC 단위 덮어쓰기 `update --auto off`) 세션 시작 확인을 하지 않는다. 수동 `update`는 그대로
 - 세션 시작 훅은 기다리지 않는다 — 백그라운드 프로세스로 `update --quiet`를 띄우고, 새 커널은 다음 실행부터 쓰인다
 """
@@ -60,8 +60,6 @@ def spawn_background():
     """세션 시작 훅용: 기다리지 않고 별도 프로세스로 run(). 띄웠으면 True."""
     from vmc_harness.core.proc import spawn_detached
     import vmc_harness
-    if not shell.load_key():
-        return False
     mark(checked_at=now_iso())  # 동시에 열린 세션이 여러 번 띄우지 않게 먼저 찍는다
     engine = str(Path(vmc_harness.__file__).resolve().parent.parent)
     env = dict(os.environ)

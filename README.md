@@ -134,7 +134,7 @@ AI에게는 **목표, 지켜야 할 선, 참고할 자료, 결과물 형식**만
 
 ## 시작하기
 
-> 라이선스 키는 VMC에서 받습니다. 키·비밀번호는 대화창이 아니라 **터미널에만** 입력합니다(대화 기록에 남지 않도록).
+> 라이선스 키 없이 설치·사용할 수 있습니다. 비밀번호는 대화창이 아니라 **터미널에만** 입력합니다(대화 기록에 남지 않도록).
 
 ```bash
 # 1. 설치 (PC당 한 번)
@@ -143,13 +143,10 @@ curl -fsSL https://api.vibemafiaclub.com/harness/install.py | python3 -
 # Windows (설치 후 터미널을 껐다 켜야 명령이 인식됩니다)
 irm https://api.vibemafiaclub.com/harness/install.py | python -
 
-# 2. 활성화 (PC당 한 번)
-vmc-harness activate
-
-# 3. 프로젝트에 설치 + 첫 진단 (프로젝트마다 한 번, 프로젝트 폴더에서)
+# 2. 프로젝트에 설치 + 첫 진단 (프로젝트마다 한 번, 프로젝트 폴더에서)
 vmc-harness init
 
-# 4. 개발 데이터베이스 연결 (필요한 프로젝트만, 읽기 전용 계정)
+# 3. 개발 데이터베이스 연결 (필요한 프로젝트만, 읽기 전용 계정)
 vmc-harness db-credential
 ```
 
@@ -161,6 +158,7 @@ vmc-harness db-credential
 | `vmc-harness link-brain <git 주소>` | 판단 카드를 팀 저장소에 연결해 공유 |
 | `vmc-harness why <파일 또는 작업>` | 그 결과에 어떤 규칙·장치가 영향을 줬는지 보기 |
 | `vmc-harness revert` | 하네스가 한 변경 되돌리기 |
+| `vmc-harness activate` | VMC에서 받은 라이선스 키 등록(선택 — 여러 PC의 야간 정리 겹침 방지·오프라인 번들) |
 | `vmc-harness remove` | 이 프로젝트에서 하네스 제거(기록은 기본으로 남김) |
 
 ---
@@ -171,7 +169,7 @@ vmc-harness db-credential
 |---|---|---|
 | 각자의 PC | AI 대화 원본, 상세 기록 | 본인 |
 | 팀 저장소 `.harness/` | 숫자·상태·장치·규칙 (원문·코드 조각·비밀번호 없음) | 팀 |
-| VMC 서버 | 라이선스·버전 정보뿐 | VMC |
+| VMC 서버 | 버전 정보(라이선스 키를 등록했으면 그 키)뿐 | VMC |
 
 **작업 데이터는 PC와 팀 저장소 밖으로 나가지 않습니다.**
 

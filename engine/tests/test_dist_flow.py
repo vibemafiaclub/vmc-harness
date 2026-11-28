@@ -49,7 +49,7 @@ class FakeApi:
 
             def _handle(self):
                 fake.calls.append((self.command, self.path, {k.lower(): v for k, v in self.headers.items()}))
-                bad = self._auth()
+                bad = None if self.path.startswith("/harness/releases/") else self._auth()   # 릴리스는 키 없이 열림
                 if bad:
                     return self._send(401, {"error": "unauthorized", "reason": bad})
                 if self.command == "POST" and self.path == "/harness/activate":
@@ -136,15 +136,15 @@ class FlowTest(DistTestCase):
         r = updater.run()
         self.assertEqual((r["status"], r["version"], r["from"]), ("updated", "0.1.1", "0.1.0"))
         self.assertEqual(shell.current_version(), "0.1.1")
-        # 계약 종료(회수) → 업데이트만 끊기고 지금 버전 그대로
+        # 키를 회수해도 업데이트는 받는다(릴리스 공개 — 2026-11-28)
         self.api.revoked = True
         self.api.releases.append(("0.1.2", synthetic_zip(self.out / "r012.zip", "0.1.2")))
-        self.assertEqual(updater.run()["status"], "unauthorized")
-        self.assertEqual(shell.current_version(), "0.1.1")
-        # 서버에 못 닿아도 그대로
+        self.assertEqual(updater.run()["status"], "updated")
+        self.assertEqual(shell.current_version(), "0.1.2")
+        # 서버에 못 닿으면 그대로
         os.environ["VMC_HARNESS_SERVER"] = "http://127.0.0.1:9"
         self.assertEqual(updater.run()["status"], "unreachable")
-        self.assertEqual(shell.current_version(), "0.1.1")
+        self.assertEqual(shell.current_version(), "0.1.2")
         self.assertFalse(updater.due())  # 방금 확인했다
 
     def test_update_rejects_corrupted_download(self):
@@ -162,6 +162,21 @@ class FlowTest(DistTestCase):
             r = shell.update_now(key=self.key)
         self.assertEqual(r["status"], "error")
         self.assertEqual(shell.current_version(), "0.1.0")
+
+    def test_update_without_license_installs_kernel(self):
+        """키 없이 받는다(2026-11-28 공개) — 활성화 없이 update·첫 실행이 커널을 설치한다."""
+        self.assertIsNone(shell.load_key())
+        r = shell.update_now()
+        self.assertEqual((r["status"], shell.current_version()), ("updated", "0.1.0"))
+        self.assertTrue(all("authorization" not in h for _, _, h in self.api.calls))
+        self.assertFalse(shell.license_file().exists())
+
+    def test_install_self_fetches_kernel_without_license(self):
+        lines = []
+        src = (Path(shell.__file__)).read_text(encoding="utf-8")
+        self.assertEqual(shell.install_self(src, ["--no-path"], out=lines.append), 0)
+        self.assertEqual(shell.current_version(), "0.1.0")
+        self.assertTrue(any("vmc-harness init" in l for l in lines), lines)
 
     def test_server_call_without_license(self):
         self.assertEqual(server.call("GET", "/harness/releases/latest"), (0, {"error": "no_license"}))

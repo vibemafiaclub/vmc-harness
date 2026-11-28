@@ -103,8 +103,13 @@ class ApiE2ETest(DistTestCase):
         r = self.run_cli("update")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn(self.v, r.stdout)
-        # 틀린 키는 401
-        req = urllib.request.Request(self.url + "/harness/releases/%s/download" % self.v, headers={"Authorization": "Bearer " + test_key()})
+        # 릴리스는 키 없이 열림(2026-11-28) — 키 없이도, 틀린 키로도 받는다
+        for h in ({}, {"Authorization": "Bearer " + test_key()}):
+            with urllib.request.urlopen(urllib.request.Request(self.url + "/harness/releases/%s/download" % self.v, headers=h), timeout=30) as resp:
+                self.assertEqual(resp.status, 200)
+        # 활성화(키 확인)는 그대로 401
+        req = urllib.request.Request(self.url + "/harness/activate", data=b"{}", method="POST",
+                                     headers={"Authorization": "Bearer " + test_key(), "Content-Type": "application/json"})
         with self.assertRaises(urllib.error.HTTPError) as cm:
             urllib.request.urlopen(req, timeout=30)
         self.assertEqual(cm.exception.code, 401)
