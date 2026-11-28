@@ -192,6 +192,20 @@ class BriefTopTest(HarnessTestCase):
         brief.top_item(self.root, mark=True)
         self.assertEqual(brief.top_item(self.root)["kind"], "diagnosis_weekly")
 
+    def test_guide_conflict_keeps_quote_and_origin(self):
+        # 하루 뒤 받아도 언제·어느 작업에서 나온 말인지 알게, 인용은 다듬지 않은 원문 그대로(2026-11-28)
+        from vmc_harness.task import state
+        state.save(self.root, {"task_id": "T-1", "session_id": "S-1", "declare": {"intent": "행사 신청 페이지를 만든다"},
+                               "started_at": "2026-11-27T17:00:00+09:00"})
+        notices.add(self.root, "guide_conflict", "flow", "'로그인 빼자' — 이 지침과 부딪힌 것 같음: QR로 로그인 확인",
+                    refs={"guide_id": "r-1", "session_id": "S-1"})
+        with mock.patch.object(brief, "_render_text", return_value=("다르게 바꿔 쓴 문장", True)):
+            it = brief.top_item(self.root)
+        self.assertIn("'로그인 빼자'", it["text"])
+        self.assertTrue(it["at"])
+        self.assertEqual(it["task"], "행사 신청 페이지를 만든다")
+        self.assertIn("작업 「행사 신청 페이지를 만든다」", brief.top_text(it))
+
     def test_cli_json(self):
         notices.add(self.root, "action_reverted", "must", "규칙 하나를 되돌렸어요")
         from vmc_harness.commands import brief as cmd
@@ -203,4 +217,4 @@ class BriefTopTest(HarnessTestCase):
             cmd._run(a)
         out = json.loads(buf.getvalue())
         self.assertEqual(out["item"]["kind"], "action_reverted")
-        self.assertTrue(out["text"].startswith("하네스: "))
+        self.assertRegex(out["text"], r"^하네스 \(\d+/\d+ \d\d:\d\d\): ")

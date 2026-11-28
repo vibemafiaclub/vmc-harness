@@ -190,7 +190,7 @@ def notices_view(root, areas, allow_llm=False):
         out.append({"id": n["id"], "kind": n.get("kind"), "level": n.get("level"), "text": text,
                     "area": n.get("area"), "when": _when(n.get("at")), "at": n.get("at"),
                     "refs": n.get("refs") or {}, "buttons": n.get("buttons") or ["자세히", "알림 끄기"],
-                    "seen": not is_pending})
+                    "seen": not is_pending, "raw": n.get("text") or ""})
     out.sort(key=lambda x: (x["seen"], 0 if x["level"] == "must" else 1, x.get("at") or ""), reverse=False)
     return out, todo
 
@@ -476,11 +476,44 @@ def _reply(kind, item_id, refs):
     return {"그만": "vmc-harness notice mute %s" % item_id}
 
 
+RAW_KINDS = ("guide_conflict",)
+
+
+def _session_intent(root, session_id):
+    """알림이 나온 대화의 착수 선언(하려는 것) — 하루 뒤 바깥에서 받아도 어느 작업 얘기인지 알게(2026-11-28). 없으면 None."""
+    st = _task_state()
+    if not session_id or st is None or not hasattr(st, "session_tasks"):
+        return None
+    try:
+        tasks = st.session_tasks(root, session_id)
+    except Exception:
+        return None
+    for t in reversed(tasks):
+        d = t.get("declare")
+        intent = d.get("intent") if isinstance(d, dict) else None
+        if intent:
+            intent = " ".join(str(intent).split())
+            return intent if len(intent) <= 80 else intent[:79] + "…"
+    return None
+
+
+def _origin(item):
+    """'11/27 21:44 · 작업 「…」' — 알림이 생긴 때와 작업. 둘 다 없으면 ''."""
+    d = parse_iso(item.get("at")) if item.get("at") else None
+    parts = []
+    if d:
+        d = d.astimezone()
+        parts.append("%d/%d %02d:%02d" % (d.month, d.day, d.hour, d.minute))
+    if item.get("task"):
+        parts.append("작업 「%s」" % item["task"])
+    return " · ".join(parts)
+
+
 def top_item(root, mark=False):
     """사람이 답할 만한 가장 중요한 1건 — 매일 바깥 브리핑(디스코드 등)에 붙이는 용도(spec 08 §전달, 2026-11-18).
     순서: 정정과 부딪힌 지침(원복 후보) → 하네스 조치 원복·게이트 꺼짐·오류 → 자동 반영(시험 중) → 답 안 한 진단 제안 → 소식.
     mark=True면 고른 알림을 보인 것으로 표시(실제로 보낸 경우만). 진단 제안은 답할 때까지 다시 고른다.
-    → {"kind","id","text","reply":{키워드: 명령|None},"more":남은 개수} | None"""
+    → {"kind","id","text","reply":{키워드: 명령|None},"more":남은 개수,"at":알림 시각|None,"task":그 대화의 작업|None} | None"""
     nv, _ = notices_view(root, None, allow_llm=False)
     order = list(config.get("render.top_kinds", root))
     unseen = [n for n in nv if not n["seen"] and n.get("kind") in order]
@@ -489,8 +522,11 @@ def top_item(root, mark=False):
     open_p = [p for p in props if p["buttons"] == ["추가", "제외"]]
     cand = []
     for n in unseen:
-        cand.append((order.index(n["kind"]), n.get("at") or "", {"kind": n["kind"], "id": n["id"], "text": n["text"],
-                                                                 "refs": n.get("refs") or {}, "_notice": True}))
+        # 원문 인용이 든 알림은 다듬지 않은 원문으로 — 다듬기가 인용을 바꿔 쓰면 무슨 말이었는지 못 알아본다(2026-11-28)
+        text = n.get("raw") or n["text"] if n["kind"] in RAW_KINDS else n["text"]
+        cand.append((order.index(n["kind"]), n.get("at") or "", {"kind": n["kind"], "id": n["id"], "text": text,
+                                                                 "refs": n.get("refs") or {}, "_notice": True,
+                                                                 "at": n.get("at")}))
     rank_auto = order.index("diagnosis_auto_applied") if "diagnosis_auto_applied" in order else len(order)
     for p in auto:
         cand.append((rank_auto, "", {"kind": "proposal_auto", "id": p["id"], "text": p["text"], "refs": {}}))
@@ -502,7 +538,8 @@ def top_item(root, mark=False):
     cand.sort(key=lambda c: (c[0], c[1]))
     best = cand[0][2]
     out = {"kind": best["kind"], "id": best["id"], "text": best["text"],
-           "reply": _reply(best["kind"], best["id"], best["refs"]), "more": len(cand) - 1}
+           "reply": _reply(best["kind"], best["id"], best["refs"]), "more": len(cand) - 1,
+           "at": best.get("at"), "task": _session_intent(root, (best.get("refs") or {}).get("session_id"))}
     if mark and best.get("_notice"):
         mark_seen(root, [best["id"]])
     return out
@@ -515,4 +552,5 @@ def top_text(item):
     keys = [k for k, v in (item.get("reply") or {}).items() if v]
     tail = (" — 답장: %s" % " / ".join("'%s'" % k for k in keys)) if keys else ""
     more = (" (남은 소식 %d건: `vmc-harness brief`)" % item["more"]) if item.get("more") else ""
-    return "하네스: %s%s%s" % (item["text"], tail, more)
+    origin = _origin(item)
+    return "하네스%s: %s%s%s" % ((" (%s)" % origin) if origin else "", item["text"], tail, more)
